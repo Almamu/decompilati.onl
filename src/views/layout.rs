@@ -88,7 +88,7 @@ pub fn render(p: Page) -> String {
                         nav {
                             a href="/projects" { "Projects" }
                             a href="/platforms" { "Platforms" }
-                            a href="/docs" { "API" }
+                            a href="/docs" { "Docs" }
                             span #auth {
                                 a.btn.btn-small href="/auth/github" { "Log in with GitHub" }
                             }
@@ -103,6 +103,10 @@ pub fn render(p: Page) -> String {
                             "Game names and images belong to their respective owners."
                         }
                         p {
+                            a href="/docs/decomp-dev" { "Coming from decomp.dev?" }
+                            " · "
+                            a href="/docs" { "Docs" }
+                            " · "
                             a href="https://github.com/Almamu/decompilati.onl" rel="noopener" { "Source code on GitHub" }
                             " · GPL-3.0"
                         }

@@ -311,13 +311,26 @@ async fn badge_response(state: &AppState, headers: &HeaderMap, slug: String, kin
 }
 
 pub async fn docs(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
-    cached(&state, &headers, "/docs".into(), || async {
+    docs_response(&state, &headers, "").await
+}
+
+pub async fn docs_page(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
+    if slug.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    docs_response(&state, &headers, &slug).await
+}
+
+async fn docs_response(state: &AppState, headers: &HeaderMap, slug: &str) -> AppResult<Response> {
+    let page = views::docs::find(slug).ok_or(AppError::NotFound)?;
+    let path = views::docs::path(page);
+    cached(state, headers, path.clone(), || async {
+        let title = if page.slug.is_empty() { "Documentation".to_string() } else { format!("{} · Docs", page.title) };
         let html = views::layout::render(Page {
-            title: "Progress API",
-            description: "How to report decompilation progress from CI.",
-            image: None,
-            body: views::docs::docs(&state.config.base_url, state.config.github_app.as_ref().map(|a| a.slug.as_str())),
-            canonical: Some("/docs".into()),
+            title: &title,
+            description: page.summary,
+            body: views::docs::page(page, &state.config.base_url, state.config.github_app.as_ref().map(|a| a.slug.as_str())),
+            canonical: Some(path),
             ..Default::default()
         });
         Ok(CachedPage::new(html, HTML))
@@ -457,7 +470,9 @@ pub async fn sitemap(State(state): State<AppState>, headers: HeaderMap) -> AppRe
         url("/", latest);
         url("/projects", latest);
         url("/platforms", latest);
-        url("/docs", None);
+        for page in views::docs::PAGES {
+            url(&views::docs::path(page), None);
+        }
         let mut platforms: Vec<&str> = listed.iter().map(|p| p.platform.as_str()).collect();
         platforms.sort_unstable();
         platforms.dedup();

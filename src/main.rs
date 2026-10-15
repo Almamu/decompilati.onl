@@ -45,6 +45,7 @@ fn router(state: AppState) -> Router {
         .route("/badge/{file}", get(public::badge))
         .route("/badge/{slug}/{kind}", get(public::badge_kind))
         .route("/docs", get(public::docs))
+        .route("/docs/{slug}", get(public::docs_page))
         .route("/feed.xml", get(public::feed))
         .route("/robots.txt", get(public::robots))
         .route("/sitemap.xml", get(public::sitemap))
