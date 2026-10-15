@@ -305,3 +305,11 @@ section > .search { margin: 0 0 12px; }
 .policy-welcome { border-color: var(--matching); }
 .policy-disclosed { border-color: var(--nonmatching); }
 .policy-forbidden { border-color: var(--danger); }
+.about-details { margin: 4px 0 6px; }
+.about-details > summary { display: inline-block; cursor: pointer; color: var(--muted); padding: 6px 12px; margin: 0 0 10px;
+  border: 1px solid var(--line); border-radius: 999px; list-style: none; }
+.about-details > summary::-webkit-details-marker { display: none; }
+.about-details > summary::before { content: "▸ "; }
+.about-details[open] > summary::before { content: "▾ "; }
+.about-details > summary:hover { color: var(--text); border-color: var(--accent); }
+.about-details .about { margin-top: 0; }

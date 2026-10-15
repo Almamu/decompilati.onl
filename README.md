@@ -3,7 +3,7 @@
 A progress tracker for video game decompilation projects. Developers log in with GitHub, register their
 project, and report progress from CI through a webhook. The site shows code progress (matching /
 non-matching / not decompiled) and data progress, a map of the project's areas, a history graph,
-community votes, a spotlight, "most progress" rankings, and an AI badge for projects that say they're
+community votes, a highlights page, project search, and an AI badge for projects that say they're
 mainly AI-generated.
 
 It's a single Rust binary (axum + SQLite) with server-rendered HTML and SVG. Nothing depends on an
@@ -78,9 +78,8 @@ report, the server fetches the commits since the previous report from GitHub (se
 - Projects with a negative score sink to the bottom of listings. At or below `HIDE_THRESHOLD`
   (default −5) they're hidden: listings put them behind a "low-rated" disclosure and the homepage
   leaves them out. Their own page still works.
-- **Spotlight:** admins (`ADMIN_LOGINS`) pick up to three projects. If none are picked, the
-  best-rated project with activity in the last 30 days is shown.
-- **Most progress:** the largest gain in decompiled code over the last 30 days.
+- **Highlights** (`/highlights`, linked from the homepage): up to 12 projects, the ones admins
+  (`ADMIN_LOGINS`) pin first, then the most upvoted.
 - Admins can also hide projects and ban users from `/admin`. Banning a user signs them out and hides
   their projects.
 - To register a repository, the user must have push access to it on GitHub. Only public

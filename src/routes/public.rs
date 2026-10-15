@@ -14,7 +14,7 @@ use crate::{
     cache::CachedPage,
     db::{self, Project},
     platforms::{self, PLATFORMS},
-    util::{now, sha256_hex},
+    util::sha256_hex,
     views::{self, layout::Page},
 };
 
@@ -49,24 +49,10 @@ fn og_image(state: &AppState, p: &Project) -> Option<String> {
 
 pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     cached(&state, &headers, "/".into(), || async {
-        let since = now() - 30 * 86400;
-        let (all, baselines) = state
-            .db
-            .run(move |c| Ok((db::public_projects(c)?, db::baselines_since(c, since)?)))
-            .await?;
+        let all = state.db.run(db::public_projects_owned).await?;
         let threshold = state.config.hide_threshold;
         let mut visible: Vec<&Project> = all.iter().filter(|p| is_visible(p, threshold)).collect();
         hot_sort(&mut visible);
-
-        let base: HashMap<i64, _> = baselines.into_iter().collect();
-        let mut movers: Vec<(&Project, f64)> = visible
-            .iter()
-            .filter(|p| p.score() >= 0)
-            .filter_map(|p| base.get(&p.id).map(|b| (*p, p.code.decompiled_pct() - b.decompiled_pct())))
-            .filter(|(_, gain)| *gain >= 0.01)
-            .collect();
-        movers.sort_by(|a, b| b.1.total_cmp(&a.1));
-        movers.truncate(6);
 
         let html = views::layout::render(Page {
             title: "",
@@ -75,7 +61,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
                 visible.len()
             ),
             image: None,
-            body: views::home::home(&movers, &visible, visible.len()),
+            body: views::home::home(&visible, visible.len()),
             canonical: Some("/".into()),
             json_ld: Some(serde_json::json!({
                 "@context": "https://schema.org",

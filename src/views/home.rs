@@ -5,11 +5,10 @@ use maud::{html, Markup};
 use crate::{
     db::Project,
     platforms::{self, PLATFORMS},
-    util::fmt_delta,
-    views::components::{ai_badge, card, card_grid, cover, last_change, legend, platform_chip, progress, vote},
+    views::components::{ai_badge, card_grid, cover, last_change, legend, platform_chip, progress, vote},
 };
 
-pub fn home(movers: &[(&Project, f64)], projects: &[&Project], total: usize) -> Markup {
+pub fn home(projects: &[&Project], total: usize) -> Markup {
     html! {
         section.hero {
             h1 { "Tracking the progress of game decompilation projects" }
@@ -23,7 +22,9 @@ pub fn home(movers: &[(&Project, f64)], projects: &[&Project], total: usize) -> 
         }
 
         section {
-            div.about {
+            details.about-details {
+                summary { "What are decomps, and how does this site work?" }
+                div.about {
                 div {
                     h2 { "What's a decomp?" }
                     p { "A decompilation project rewrites a game's compiled machine code back into human-readable source code, usually C or C++, one function at a time. "
@@ -41,20 +42,9 @@ pub fn home(movers: &[(&Project, f64)], projects: &[&Project], total: usize) -> 
                     p { "Logged-in users can upvote or downvote any project. "
                         "Votes decide what gets featured: low-rated projects sink in the listings and are hidden past a threshold, so stalled, misleading or spam entries don't crowd out real work." }
                 }
-            }
-            (legend())
-        }
-
-
-        @if !movers.is_empty() {
-            section {
-                h2.section-title { "Most progress " span.muted { "· last 30 days" } }
-                div.grid {
-                    @for (p, gain) in movers {
-                        (card(p, Some(html! { p.gain { "▲ " (fmt_delta(*gain)) " code in 30 days" } })))
-                    }
                 }
             }
+            (legend())
         }
 
         section {

@@ -698,31 +698,6 @@ pub fn reports_for_project(c: &Conn, project_id: i64, version: &str, limit: usiz
     Ok(rows)
 }
 
-/// For every project, the code stats its default version had at `since` (the latest report
-/// at or before it, or its first report if it was created afterwards). Used for "most progress".
-pub fn baselines_since(c: &Conn, since: i64) -> anyhow::Result<Vec<(i64, CodeStats)>> {
-    let mut st = c.prepare_cached(
-        "SELECT p.id,
-            COALESCE(
-              (SELECT r.id FROM reports r WHERE r.project_id = p.id AND r.version = p.default_version
-                 AND r.created_at <= ?1 ORDER BY r.created_at DESC LIMIT 1),
-              (SELECT r.id FROM reports r WHERE r.project_id = p.id AND r.version = p.default_version
-                 ORDER BY r.created_at ASC LIMIT 1)
-            ) AS rid
-         FROM projects p WHERE p.last_report_at >= ?1",
-    )?;
-    let ids: Vec<(i64, Option<i64>)> = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
-    let mut get = c.prepare_cached("SELECT code_total, code_matching, code_nonmatching FROM reports WHERE id = ?1")?;
-    let mut out = Vec::with_capacity(ids.len());
-    for (pid, rid) in ids {
-        if let Some(rid) = rid {
-            let s = get.query_row([rid], |r| Ok(CodeStats { total: r.get(0)?, matching: r.get(1)?, non_matching: r.get(2)? }))?;
-            out.push((pid, s));
-        }
-    }
-    Ok(out)
-}
-
 // ---------------------------------------------------------------- votes
 
 /// Set a user's vote (`value` of -1, 0 or 1) and refresh the project's counters.
