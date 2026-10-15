@@ -552,15 +552,22 @@ pub fn set_default_version(c: &mut Conn, project_id: i64, version: &str) -> anyh
 pub struct Applied {
     /// The commit of the version's previous report, to list the commits in between.
     pub prev_commit: Option<String>,
+    /// The report was older than the current state and was only added to the history.
+    pub historical: bool,
 }
 
 /// Stores a new report for its version. Returns `None` if nothing changed compared to that
 /// version's current state (in which case nothing is written and no cache needs purging).
 /// The first version a project reports becomes its default.
-pub fn apply_report(c: &mut Conn, project: &Project, r: &Report) -> anyhow::Result<Option<Applied>> {
+pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>) -> anyhow::Result<Option<Applied>> {
     let version = r.version.as_str();
     let areas_json = serde_json::to_string(&r.areas)?;
     let current = version_state(c, project.id, version)?;
+    let t = at.unwrap_or_else(now);
+    // Older than the current state: it only belongs in the history.
+    if current.as_ref().and_then(|v| v.last_report_at).is_some_and(|last| t < last) {
+        return Ok(insert_history(c, project.id, r, t)?.then_some(Applied { prev_commit: None, historical: true }));
+    }
     if let Some(v) = &current {
         if v.code == r.code && v.data == r.data && v.areas_json == areas_json && v.unit == r.unit && v.layout == r.layout {
             return Ok(None);
@@ -568,7 +575,6 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report) -> anyhow::Resu
     }
     let prev_commit = current.as_ref().and_then(|v| v.last_commit.clone());
     let prev = current.map(|v| (v.code, v.data)).unwrap_or_default();
-    let t = now();
     let tx = c.transaction()?;
     tx.execute(
         "INSERT INTO project_versions (project_id, version, unit, layout, code_total, code_matching, code_nonmatching,
@@ -612,7 +618,27 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report) -> anyhow::Resu
         mirror_version(&tx, project.id, version)?;
     }
     tx.commit()?;
-    Ok(Some(Applied { prev_commit }))
+    Ok(Some(Applied { prev_commit, historical: false }))
+}
+
+/// Adds a past report to a version's history without touching its current state. Returns
+/// `false` if that commit (or that exact time) is already in the history.
+fn insert_history(c: &mut Conn, project_id: i64, r: &Report, at: i64) -> anyhow::Result<bool> {
+    let exists: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM reports WHERE project_id = ?1 AND version = ?2
+                       AND (created_at = ?3 OR (?4 IS NOT NULL AND commit_hash = ?4)))",
+        params![project_id, r.version, at, r.commit],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Ok(false);
+    }
+    c.execute(
+        "INSERT INTO reports (project_id, version, created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![project_id, r.version, at, r.code.total, r.code.matching, r.code.non_matching, r.data.total, r.data.done, r.commit, r.message],
+    )?;
+    Ok(true)
 }
 
 pub fn reports_for_project(c: &Conn, project_id: i64, version: &str, limit: usize) -> anyhow::Result<Vec<ReportRow>> {

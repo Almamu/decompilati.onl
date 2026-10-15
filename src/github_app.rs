@@ -47,6 +47,8 @@ struct WorkflowRun {
     head_sha: String,
     conclusion: Option<String>,
     head_commit: Option<HeadCommit>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -197,16 +199,7 @@ async fn try_import_run(state: &AppState, app: &GithubAppConfig, installation: u
         .json()
         .await?;
     // decomp.dev's convention: one `<version>_report` artifact per game version.
-    let mut reports: Vec<(String, &Artifact)> = list
-        .artifacts
-        .iter()
-        .filter(|a| !a.expired)
-        .filter_map(|a| {
-            let version = if a.name == "report" { Some("") } else { a.name.strip_suffix("_report") }?;
-            crate::report::valid_version(version).then(|| (version.to_string(), a))
-        })
-        .collect();
-    reports.sort_by(|a, b| a.0.cmp(&b.0));
+    let reports = report_artifacts(&list);
     if reports.is_empty() {
         tracing::info!(%repo, run = run.id, "workflow run has no *_report artifact");
         return Ok(());
@@ -220,17 +213,15 @@ async fn try_import_run(state: &AppState, app: &GithubAppConfig, installation: u
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn import_artifact(
+/// Downloads a `<version>_report` artifact and converts the objdiff report inside it.
+async fn fetch_artifact_report(
     state: &AppState,
     token: &str,
-    repo: &str,
+    artifact: &Artifact,
+    version: &str,
     head_sha: &str,
     message: Option<String>,
-    version: &str,
-    artifact: &Artifact,
-    projects: &[db::Project],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<crate::report::Report> {
     anyhow::ensure!(artifact.size_in_bytes <= MAX_ARTIFACT, "artifact is too large");
     let zip_bytes = state
         .http
@@ -243,9 +234,8 @@ async fn import_artifact(
         .bytes()
         .await?;
     anyhow::ensure!((zip_bytes.len() as u64) <= MAX_ARTIFACT, "artifact is too large");
-
     let (commit, v) = (head_sha.to_string(), version.to_string());
-    let report = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let json = read_report(&zip_bytes)?;
         let r: objdiff::Report = serde_json::from_slice(&json)?;
         let mut input = r.into_input(Some(commit), message);
@@ -253,14 +243,27 @@ async fn import_artifact(
         input.version = Some(v);
         input.normalize().map_err(anyhow::Error::msg)
     })
-    .await??;
+    .await?
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn import_artifact(
+    state: &AppState,
+    token: &str,
+    repo: &str,
+    head_sha: &str,
+    message: Option<String>,
+    version: &str,
+    artifact: &Artifact,
+    projects: &[db::Project],
+) -> anyhow::Result<()> {
+    let report = fetch_artifact_report(state, token, artifact, version, head_sha, message).await?;
     for project in projects {
         if !state.limiter.check(&format!("progress:{}", project.id), 120, 3600) {
             continue;
         }
         let (p, r) = (project.clone(), report.clone());
-        let applied = state.db.run(move |c| db::apply_report(c, &p, &r)).await?;
+        let applied = state.db.run(move |c| db::apply_report(c, &p, &r, None)).await?;
         tracing::info!(%repo, project = %project.slug, %version, changed = applied.is_some(), "imported report from workflow run");
         if let Some(applied) = applied {
             state.cache.invalidate(version_paths(&project.slug, &project.platform, version));
@@ -273,6 +276,172 @@ async fn import_artifact(
             );
         }
     }
+    Ok(())
+}
+
+/// `<version>_report` artifacts of a run (`report` alone is the unnamed version), by version.
+fn report_artifacts(list: &ArtifactList) -> Vec<(String, &Artifact)> {
+    let mut reports: Vec<(String, &Artifact)> = list
+        .artifacts
+        .iter()
+        .filter(|a| !a.expired)
+        .filter_map(|a| {
+            let version = if a.name == "report" { Some("") } else { a.name.strip_suffix("_report") }?;
+            crate::report::valid_version(version).then(|| (version.to_string(), a))
+        })
+        .collect();
+    reports.sort_by(|a, b| a.0.cmp(&b.0));
+    reports
+}
+
+async fn gh_get<T: serde::de::DeserializeOwned>(state: &AppState, token: &str, url: &str) -> anyhow::Result<T> {
+    Ok(state
+        .http
+        .get(url)
+        .bearer_auth(token)
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?)
+}
+
+// ---------------------------------------------------------------- history import
+
+/// Progress of a history import, shown on the project's dashboard page.
+#[derive(Clone, Debug, Default)]
+pub struct ImportStatus {
+    pub running: bool,
+    pub runs_total: usize,
+    pub runs_done: usize,
+    pub imported: usize,
+    pub error: Option<String>,
+    pub finished_at: Option<i64>,
+}
+
+/// The app's installation on a repository, if it's installed there.
+async fn installation_for_repo(state: &AppState, app: &GithubAppConfig, repo: &str) -> anyhow::Result<Option<u64>> {
+    #[derive(Deserialize)]
+    struct Inst {
+        id: u64,
+    }
+    let res = state
+        .http
+        .get(format!("https://api.github.com/repos/{repo}/installation"))
+        .bearer_auth(app_jwt(app)?)
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await?;
+    if res.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    Ok(Some(res.error_for_status()?.json::<Inst>().await?.id))
+}
+
+#[derive(Deserialize)]
+struct RunList {
+    workflow_runs: Vec<WorkflowRun>,
+}
+
+/// Starts importing a project's history from its past workflow runs. Errors if the app isn't
+/// installed on the repository or an import is already running.
+pub async fn start_history_import(state: &AppState, project: db::Project) -> Result<(), String> {
+    let app = state.config.github_app.clone().ok_or("The GitHub App isn't configured on this server.")?;
+    if state.imports.lock().get(&project.id).is_some_and(|s| s.running) {
+        return Err("An import is already running for this project.".into());
+    }
+    let installation = installation_for_repo(state, &app, &project.repo)
+        .await
+        .map_err(|_| "Couldn't reach GitHub, please try again.".to_string())?
+        .ok_or_else(|| format!("Install the GitHub App on {} first.", project.repo))?;
+    state.imports.lock().insert(project.id, ImportStatus { running: true, ..Default::default() });
+    let state = state.clone();
+    tokio::spawn(async move {
+        let id = project.id;
+        let result = import_history(&state, &app, installation, &project).await;
+        let mut imports = state.imports.lock();
+        let status = imports.entry(id).or_default();
+        status.running = false;
+        status.finished_at = Some(crate::util::now());
+        if let Err(e) = result {
+            tracing::warn!(repo = %project.repo, error = %e, "history import failed");
+            status.error = Some(e.to_string());
+        }
+    });
+    Ok(())
+}
+
+async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u64, project: &db::Project) -> anyhow::Result<()> {
+    const MAX_RUNS: usize = 1000;
+    let repo = &project.repo;
+    let token = installation_token(state, app, installation).await?;
+    #[derive(Deserialize)]
+    struct RepoInfo {
+        default_branch: String,
+    }
+    let info: RepoInfo = gh_get(state, &token, &format!("https://api.github.com/repos/{repo}")).await?;
+
+    // Successful runs on the default branch, newest first from the API.
+    let mut runs = Vec::new();
+    for page in 1..=MAX_RUNS / 100 {
+        let url = format!(
+            "https://api.github.com/repos/{repo}/actions/runs?branch={}&status=success&per_page=100&page={page}",
+            crate::auth::urlencode(&info.default_branch)
+        );
+        let list: RunList = gh_get(state, &token, &url).await?;
+        let done = list.workflow_runs.len() < 100;
+        runs.extend(list.workflow_runs.into_iter().filter(|r| r.event != "pull_request"));
+        if done {
+            break;
+        }
+    }
+    runs.reverse();
+    if let Some(s) = state.imports.lock().get_mut(&project.id) {
+        s.runs_total = runs.len();
+    }
+
+    let mut versions_touched = std::collections::BTreeSet::new();
+    for run in runs {
+        let at = run.updated_at.as_deref().and_then(crate::util::parse_timestamp);
+        let artifacts: ArtifactList = match gh_get(
+            state,
+            &token,
+            &format!("https://api.github.com/repos/{repo}/actions/runs/{}/artifacts?per_page=100", run.id),
+        )
+        .await
+        {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::debug!(%repo, run = run.id, error = %e, "couldn't list artifacts");
+                ArtifactList { artifacts: vec![] }
+            }
+        };
+        let message = run.head_commit.as_ref().map(|c| c.message.clone());
+        for (version, artifact) in report_artifacts(&artifacts) {
+            let report = match fetch_artifact_report(state, &token, artifact, &version, &run.head_sha, message.clone()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(%repo, run = run.id, error = %e, "skipping artifact");
+                    continue;
+                }
+            };
+            let p = project.clone();
+            if state.db.run(move |c| db::apply_report(c, &p, &report, at)).await?.is_some() {
+                versions_touched.insert(version);
+                if let Some(s) = state.imports.lock().get_mut(&project.id) {
+                    s.imported += 1;
+                }
+            }
+        }
+        if let Some(s) = state.imports.lock().get_mut(&project.id) {
+            s.runs_done += 1;
+        }
+    }
+    for version in &versions_touched {
+        state.cache.invalidate(version_paths(&project.slug, &project.platform, version));
+    }
+    tracing::info!(%repo, versions = versions_touched.len(), "history import finished");
     Ok(())
 }
 

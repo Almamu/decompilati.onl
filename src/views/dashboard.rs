@@ -147,6 +147,7 @@ pub fn new_project(f: &ProjectForm, repos: &RepoOptions, error: Option<&str>) ->
         section.narrow {
             p { a href="/dashboard" { "← Your projects" } }
             h1 { "Add a project" }
+            p.muted { "Coming from decomp.dev? " a href="/docs#decomp-dev" { "Here's how to move over" } ", including your history." }
             @if let Some(e) = error { div.notice.err { (e) } }
             form.form method="post" action="/dashboard/new" enctype="multipart/form-data" {
                 (form_fields(f, repos))
@@ -172,6 +173,7 @@ pub fn edit_project(
     base_url: &str,
     app_slug: Option<&str>,
     versions: &[String],
+    import: Option<&crate::github_app::ImportStatus>,
 ) -> Markup {
     html! {
         section.narrow {
@@ -221,7 +223,7 @@ pub fn edit_project(
 
             div.panel {
                 h2 { "Progress webhook" }
-                p { "Send progress reports from your CI with the API key (starts with " code { (p.api_key_prefix) "…" } "). See the " a href="/docs" { "API documentation" } " for the full report format." }
+                p { "Send progress reports from your CI with the API key (starts with " code { (p.api_key_prefix) "…" } "). See the " a href="/docs" { "API documentation" } " for the full report format, or the " a href="/docs#decomp-dev" { "guide for projects coming from decomp.dev" } "." }
                 pre.code { "curl -X POST " (base_url) "/api/v1/progress \\\n  -H \"Authorization: Bearer $DECOMP_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  --data @progress.json" }
                 form method="post" action={ "/dashboard/p/" (p.id) "/key" } {
                     button.btn.btn-ghost type="submit" { "Regenerate API key" }
@@ -235,6 +237,26 @@ pub fn edit_project(
                     p { "If your CI uploads objdiff's " code { "report.json" } " as an artifact named " code { "<version>_report" } " (as decomp.dev required), install the GitHub App on "
                         code { (p.repo) } ". Every successful workflow run on the default branch is then imported automatically, with no API key needed." }
                     p { a.btn href={ "https://github.com/apps/" (slug) "/installations/new" } rel="noopener" { "Install the GitHub App" } }
+                    h3 { "Import history" }
+                    p { "Imports the " code { "<version>_report" } " artifacts of past successful runs on the default branch, oldest first, so the history graph starts before you joined. "
+                        "GitHub only keeps artifacts for a limited time (90 days by default); for older history, see " a href="/docs#decomp-dev" { "backfilling through the API" } "." }
+                    @match import {
+                        Some(s) if s.running => {
+                            p.notice { "Import running: " (s.runs_done) " of " (s.runs_total) " workflow runs checked, " (s.imported) " reports imported. Reload the page to update." }
+                        }
+                        _ => {
+                            @if let Some(s) = import {
+                                @if let Some(e) = &s.error {
+                                    p.notice.err { "The last import stopped with an error: " (e) }
+                                } @else {
+                                    p.notice.ok { "Last import finished: " (s.runs_done) " workflow runs checked, " (s.imported) " reports imported." }
+                                }
+                            }
+                            form method="post" action={ "/dashboard/p/" (p.id) "/import-history" } {
+                                button.btn.btn-ghost type="submit" { "Import history from GitHub Actions" }
+                            }
+                        }
+                    }
                 }
             }
 

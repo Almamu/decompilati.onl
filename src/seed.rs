@@ -92,11 +92,9 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
             .normalize()
             .map_err(anyhow::Error::msg)?;
             let project = db::project_by_id(&c, id)?.unwrap();
-            db::apply_report(&mut c, &project, &report)?;
-            // Backdate the report so the history chart has a time axis.
+            // Spread the reports over the past weeks so the history chart has a time axis.
             let ts = now() - (reports - i) as i64 * 5 * 86400 - rng.gen_range(0..86400);
-            c.execute("UPDATE reports SET created_at = ?1 WHERE id = (SELECT MAX(id) FROM reports WHERE project_id = ?2)", (ts, id))?;
-            c.execute("UPDATE projects SET last_report_at = ?1 WHERE id = ?2", (ts, id))?;
+            db::apply_report(&mut c, &project, &report, Some(ts))?;
         }
     }
     Ok(())

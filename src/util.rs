@@ -132,3 +132,13 @@ mod tests {
         assert_eq!(fmt_count(1234567), "1,234,567");
     }
 }
+
+/// Parses Unix seconds or an RFC 3339 date-time.
+pub fn parse_timestamp(s: &str) -> Option<i64> {
+    let s = s.trim();
+    s.parse::<i64>().ok().or_else(|| {
+        time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+            .ok()
+            .map(|t| t.unix_timestamp())
+    })
+}

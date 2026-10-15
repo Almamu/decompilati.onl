@@ -204,7 +204,8 @@ async fn edit_form_page(state: &AppState, u: &SessionUser, p: &Project, f: &Proj
         .await
         .unwrap_or_default();
     let app_slug = state.config.github_app.as_ref().map(|a| a.slug.as_str());
-    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, app_slug, &versions))
+    let import = state.imports.lock().get(&p.id).cloned();
+    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, app_slug, &versions, import.as_ref()))
 }
 
 async fn edit_page(state: &AppState, u: &SessionUser, p: &Project, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {
@@ -365,4 +366,13 @@ pub async fn admin_ban(State(state): State<AppState>, RequireAdmin(_u): RequireA
         state.cache.invalidate(membership_paths(&p.slug, &p.platform));
     }
     Ok(Redirect::to("/admin").into_response())
+}
+
+/// Starts importing the project's history from its past GitHub Actions runs.
+pub async fn import_history(State(state): State<AppState>, RequireUser(u): RequireUser, Path(id): Path<i64>) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    match crate::github_app::start_history_import(&state, p.clone()).await {
+        Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("History import started. It runs in the background; reload this page to follow it."), None).await),
+        Err(e) => Ok(edit_page(&state, &u, &p, Some(&e), None, None).await),
+    }
 }

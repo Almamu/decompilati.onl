@@ -65,6 +65,7 @@ fn router(state: AppState) -> Router {
             post(dashboard::upload_image).layer(DefaultBodyLimit::max(images::MAX_UPLOAD + 64 * 1024)),
         )
         .route("/dashboard/p/{id}/key", post(dashboard::regenerate_key))
+        .route("/dashboard/p/{id}/import-history", post(dashboard::import_history))
         .route("/dashboard/p/{id}/delete", post(dashboard::delete))
         .route("/admin", get(dashboard::admin))
         .route("/admin/p/{id}/spotlight", post(dashboard::admin_spotlight))

@@ -28,6 +28,9 @@ pub struct ProgressQuery {
     /// Commit and message for report formats that don't carry them (objdiff).
     commit: Option<String>,
     message: Option<String>,
+    /// When the report was produced (Unix seconds or RFC 3339), to backfill history. Reports
+    /// older than the current state only go into the history.
+    timestamp: Option<String>,
 }
 
 /// `POST /api/v1/progress` — the progress webhook. Accepts our own report format or an
@@ -47,8 +50,18 @@ pub async fn progress(State(state): State<AppState>, Query(q): Query<ProgressQue
         .await?
         .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "invalid API key".into()))?;
 
-    if !state.limiter.check(&format!("progress:{}", project.id), 120, 3600) {
-        return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded (120 reports per hour)".into()));
+    let at = match q.timestamp.as_deref() {
+        None => None,
+        Some(s) => Some(
+            crate::util::parse_timestamp(s)
+                .filter(|t| *t >= 946_684_800 && *t <= crate::util::now() + 300)
+                .ok_or_else(|| ApiError::bad("timestamp must be Unix seconds or RFC 3339, between 2000 and now"))?,
+        ),
+    };
+    // Backfilling history sends many reports in a row, so it gets its own, larger budget.
+    let (bucket, limit) = if at.is_some() { ("backfill", 3000) } else { ("progress", 120) };
+    if !state.limiter.check(&format!("{bucket}:{}", project.id), limit, 3600) {
+        return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, format!("rate limit exceeded ({limit} reports per hour)")));
     }
 
     let gzip = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"gzip"));
@@ -77,17 +90,19 @@ pub async fn progress(State(state): State<AppState>, Query(q): Query<ProgressQue
 
     let (commit, version) = (report.commit.clone(), report.version.clone());
     let before = project.clone();
-    let applied = state.db.run(move |c| db::apply_report(c, &project, &report)).await?;
+    let applied = state.db.run(move |c| db::apply_report(c, &project, &report, at)).await?;
     if let Some(applied) = &applied {
         state.cache.invalidate(version_paths(&before.slug, &before.platform, &version));
-        crate::github::spawn_commit_fetch(state.clone(), before.clone(), version.clone(), applied.prev_commit.clone(), commit);
+        if !applied.historical {
+            crate::github::spawn_commit_fetch(state.clone(), before.clone(), version.clone(), applied.prev_commit.clone(), commit);
+        }
     }
-    Ok(Json(serde_json::json!({
-        "status": if applied.is_some() { "updated" } else { "unchanged" },
-        "project": before.slug,
-        "version": version,
-    }))
-    .into_response())
+    let status = match &applied {
+        None => "unchanged",
+        Some(a) if a.historical => "history",
+        Some(_) => "updated",
+    };
+    Ok(Json(serde_json::json!({ "status": status, "project": before.slug, "version": version })).into_response())
 }
 
 /// `GET /api/me` — who is logged in and how they voted. Never cached.
