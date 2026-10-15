@@ -33,6 +33,9 @@ fn item(base: &str, it: &FeedItem) -> String {
         fmt_pct(it.code.matching_pct()),
         fmt_pct(it.code.non_matching_pct())
     );
+    if it.code.linked > 0 {
+        let _ = write!(html, " · fully linked {}", fmt_pct(it.code.linked_pct()));
+    }
     if it.data.total > 0 {
         let _ = write!(html, " · data {}", fmt_pct(it.data.pct()));
     }

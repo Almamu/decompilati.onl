@@ -9,6 +9,7 @@
   --matching: #3fb950;
   --nonmatching: #d29922;
   --data: #58a6ff;
+  --linked: #bc8cff;
   --none: #2a3240;
   --danger: #f85149;
   --radius: 10px;
@@ -19,7 +20,7 @@
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f6f7f9; --bg2: #ffffff; --panel: #ffffff; --line: #dfe3ea; --text: #1b2230;
-    --muted: #5d6779; --accent: #2f5bd3; --none: #e3e7ee; --matching: #2da44e; --nonmatching: #bf8700; --data: #2f81f7;
+    --muted: #5d6779; --accent: #2f5bd3; --none: #e3e7ee; --matching: #2da44e; --nonmatching: #bf8700; --data: #2f81f7; --linked: #8250df;
     color-scheme: light;
   }
 }
@@ -110,6 +111,7 @@ section { margin-bottom: 36px; }
 .sw.matching { background: var(--matching); }
 .sw.nonmatching { background: var(--nonmatching); }
 .sw.data { background: var(--data); }
+.sw.linked { background: var(--linked); }
 .sw.decomp { background: var(--nonmatching); }
 .bar { display: flex; height: 10px; background: var(--none); border-radius: 5px; overflow: hidden; flex: 1; min-width: 60px; }
 .seg { display: block; height: 100%; }
@@ -181,6 +183,7 @@ svg.history { width: 100%; height: auto; display: block; }
 .h-decomp { stroke: var(--nonmatching); }
 .h-match { stroke: var(--matching); }
 .h-data { stroke: var(--data); stroke-dasharray: 4 3; }
+.h-linked { stroke: var(--linked); stroke-dasharray: 1 3; stroke-linecap: round; }
 .area-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .area-tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 6px; }
 .area-name { display: flex; justify-content: space-between; font-weight: 600; gap: 8px; }
@@ -285,6 +288,8 @@ footer.site p { margin: 4px 0; }
 .stat-card .bar { height: 14px; border-radius: 7px; }
 .stat-parts { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .85rem; color: var(--muted); }
 .stat-parts b { color: var(--text); font-variant-numeric: tabular-nums; }
+.stat-linked { margin: 0; font-size: .85rem; color: var(--muted); }
+.stat-linked b { color: var(--text); font-variant-numeric: tabular-nums; }
 .inline-form { display: flex; gap: 8px; flex-wrap: wrap; } .inline-form input { flex: 1; min-width: 240px; }
 button.toggle { background: none; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); cursor: pointer;
   font-size: .75rem; line-height: 1; padding: 2px 5px; }

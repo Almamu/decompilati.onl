@@ -236,6 +236,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "data": p.data,
             "code_matching_pct": p.code.matching_pct(),
             "code_decompiled_pct": p.code.decompiled_pct(),
+            "code_linked_pct": p.code.linked_pct(),
             "data_pct": p.data.pct(),
             "functions": p.functions,
             "areas": p.areas(),
@@ -258,7 +259,7 @@ pub async fn badge(State(state): State<AppState>, headers: HeaderMap, Path(file)
     badge_response(&state, &headers, slug, "decompiled").await
 }
 
-/// `GET /badge/{slug}/{matching,data,functions}.svg`
+/// `GET /badge/{slug}/{matching,data,functions,linked}.svg`
 pub async fn badge_kind(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -268,6 +269,7 @@ pub async fn badge_kind(
         "matching.svg" => "matching",
         "data.svg" => "data",
         "functions.svg" => "functions",
+        "linked.svg" => "linked",
         _ => return Err(AppError::NotFound),
     };
     badge_response(&state, &headers, slug, kind).await
@@ -279,6 +281,8 @@ async fn badge_response(state: &AppState, headers: &HeaderMap, slug: String, kin
         let p = load_public_project(state, slug).await?;
         let svg = match kind {
             "matching" => views::svg::badge("matching", &crate::util::fmt_pct(p.code.matching_pct()), Some(p.code.matching_pct())),
+            "linked" if p.code.linked > 0 => views::svg::badge("fully linked", &crate::util::fmt_pct(p.code.linked_pct()), Some(p.code.linked_pct())),
+            "linked" => views::svg::badge("fully linked", "n/a", None),
             "data" if p.data.total > 0 => views::svg::badge("data", &crate::util::fmt_pct(p.data.pct()), Some(p.data.pct())),
             "functions" if p.functions.total > 0 => views::svg::badge(
                 "functions",
@@ -520,6 +524,7 @@ pub async fn legacy_or_not_found(State(state): State<AppState>, uri: axum::http:
             match measure {
                 "data" | "matched_data" | "complete_data" => format!("/badge/{}/data.svg", p.slug),
                 "functions" | "matched_functions" => format!("/badge/{}/functions.svg", p.slug),
+                "complete_code" | "linked_code" => format!("/badge/{}/linked.svg", p.slug),
                 "fuzzy" | "fuzzy_match" => format!("/badge/{}.svg", p.slug),
                 _ => format!("/badge/{}/matching.svg", p.slug),
             }

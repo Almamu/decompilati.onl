@@ -12,6 +12,10 @@ pub struct CodeStats {
     pub matching: u64,
     #[serde(default, alias = "nonmatching", alias = "non_matching_decompiled")]
     pub non_matching: u64,
+    /// Code in units that are fully linked (built entirely from decompiled source); objdiff's
+    /// `complete_code`. Independent of the two above.
+    #[serde(default, alias = "complete", alias = "fully_linked")]
+    pub linked: u64,
 }
 
 impl CodeStats {
@@ -19,6 +23,10 @@ impl CodeStats {
         self.total += o.total;
         self.matching += o.matching;
         self.non_matching += o.non_matching;
+        self.linked += o.linked;
+    }
+    pub fn linked_pct(&self) -> f64 {
+        pct(self.linked, self.total)
     }
     pub fn matching_pct(&self) -> f64 {
         pct(self.matching, self.total)
@@ -165,6 +173,9 @@ fn check_code(c: &CodeStats, what: &str) -> Result<(), String> {
     if c.matching.saturating_add(c.non_matching) > c.total {
         return Err(format!("{what}: matching + non_matching ({}) exceeds total ({})", c.matching + c.non_matching, c.total));
     }
+    if c.linked > c.total {
+        return Err(format!("{what}: linked ({}) exceeds total ({})", c.linked, c.total));
+    }
     Ok(())
 }
 
@@ -284,7 +295,7 @@ mod tests {
         )
         .unwrap();
         let r = input.normalize().unwrap();
-        assert_eq!(r.code, CodeStats { total: 200, matching: 50, non_matching: 10 });
+        assert_eq!(r.code, CodeStats { total: 200, matching: 50, non_matching: 10, linked: 0 });
         assert_eq!(r.data, DataStats { total: 10, done: 5 });
         assert_eq!(r.areas[0].code.total, 200);
     }

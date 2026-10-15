@@ -183,6 +183,13 @@ ALTER TABLE projects ADD COLUMN repo_url TEXT;
 -- Which GitHub Actions artifacts the GitHub App imports into a project: '*' for every
 -- <version>_report artifact, '' for none, or a comma-separated list of artifact names.
 ALTER TABLE projects ADD COLUMN app_artifacts TEXT NOT NULL DEFAULT '*';
+"#, r#"
+-- Code in fully linked units (objdiff's complete_code).
+ALTER TABLE projects ADD COLUMN code_linked BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN prev_code_linked BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE project_versions ADD COLUMN code_linked BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE project_versions ADD COLUMN prev_code_linked BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE reports ADD COLUMN code_linked BIGINT NOT NULL DEFAULT 0;
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -327,7 +334,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
     p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord, p.github_repo_id,
-    p.repo_host, p.repo_url, p.app_artifacts";
+    p.repo_host, p.repo_url, p.app_artifacts, p.code_linked, p.prev_code_linked";
 
 fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
     Ok(Project {
@@ -347,9 +354,9 @@ fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
         api_key_prefix: r.try_get(13)?,
         unit: r.try_get(14)?,
         layout: Layout::parse(r.try_get::<_, &str>(15)?),
-        code: CodeStats { total: unsigned(r, 16)?, matching: unsigned(r, 17)?, non_matching: unsigned(r, 18)? },
+        code: CodeStats { total: unsigned(r, 16)?, matching: unsigned(r, 17)?, non_matching: unsigned(r, 18)?, linked: unsigned(r, 43)? },
         data: DataStats { total: unsigned(r, 19)?, done: unsigned(r, 20)? },
-        prev_code: CodeStats { total: unsigned(r, 21)?, matching: unsigned(r, 22)?, non_matching: unsigned(r, 23)? },
+        prev_code: CodeStats { total: unsigned(r, 21)?, matching: unsigned(r, 22)?, non_matching: unsigned(r, 23)?, linked: unsigned(r, 44)? },
         prev_data: DataStats { total: unsigned(r, 24)?, done: unsigned(r, 25)? },
         areas_json: r.try_get(26)?,
         last_report_at: r.try_get(27)?,
@@ -635,16 +642,16 @@ impl VersionState {
 
 const VERSION_COLS: &str = "version, unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
     prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
-    areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched";
+    areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched, code_linked, prev_code_linked";
 
 fn version_from_row(r: &Row) -> Result<VersionState, postgres::Error> {
     Ok(VersionState {
         version: r.try_get(0)?,
         unit: r.try_get(1)?,
         layout: Layout::parse(r.try_get::<_, &str>(2)?),
-        code: CodeStats { total: unsigned(r, 3)?, matching: unsigned(r, 4)?, non_matching: unsigned(r, 5)? },
+        code: CodeStats { total: unsigned(r, 3)?, matching: unsigned(r, 4)?, non_matching: unsigned(r, 5)?, linked: unsigned(r, 20)? },
         data: DataStats { total: unsigned(r, 6)?, done: unsigned(r, 7)? },
-        prev_code: CodeStats { total: unsigned(r, 8)?, matching: unsigned(r, 9)?, non_matching: unsigned(r, 10)? },
+        prev_code: CodeStats { total: unsigned(r, 8)?, matching: unsigned(r, 9)?, non_matching: unsigned(r, 10)?, linked: unsigned(r, 21)? },
         prev_data: DataStats { total: unsigned(r, 11)?, done: unsigned(r, 12)? },
         areas_json: r.try_get(13)?,
         last_report_at: r.try_get(14)?,
@@ -671,10 +678,12 @@ fn mirror_version(c: &mut impl GenericClient, project_id: i64, version: &str) ->
     c.execute(
         "UPDATE projects p SET (unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
                 prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
-                areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched) =
+                areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched,
+                code_linked, prev_code_linked) =
             (v.unit, v.layout, v.code_total, v.code_matching, v.code_nonmatching, v.data_total, v.data_done,
                 v.prev_code_total, v.prev_code_matching, v.prev_code_nonmatching, v.prev_data_total, v.prev_data_done,
-                v.areas_json, v.last_report_at, v.last_commit, v.last_message, v.commits_json, v.functions_total, v.functions_matched)
+                v.areas_json, v.last_report_at, v.last_commit, v.last_message, v.commits_json, v.functions_total, v.functions_matched,
+                v.code_linked, v.prev_code_linked)
          FROM project_versions v
          WHERE p.id = $1 AND v.project_id = p.id AND v.version = $2",
         &[&project_id, &version],
@@ -732,11 +741,11 @@ pub struct Applied {
 
 fn insert_report_row(c: &mut impl GenericClient, project_id: i64, r: &Report, at: i64) -> anyhow::Result<()> {
     c.execute(
-        "INSERT INTO reports (project_id, version, created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "INSERT INTO reports (project_id, version, created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message, code_linked)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         &[
             &project_id, &r.version, &at, &big(r.code.total), &big(r.code.matching), &big(r.code.non_matching),
-            &big(r.data.total), &big(r.data.done), &r.commit, &r.message,
+            &big(r.data.total), &big(r.data.done), &r.commit, &r.message, &big(r.code.linked),
         ],
     )?;
     Ok(())
@@ -768,8 +777,8 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
         "INSERT INTO project_versions (project_id, version, unit, layout, code_total, code_matching, code_nonmatching,
                 data_total, data_done, prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total,
                 prev_data_done, areas_json, last_report_at, last_commit, last_message, commits_json,
-                functions_total, functions_matched)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, '{}', $19, $20)
+                functions_total, functions_matched, code_linked, prev_code_linked)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, '{}', $19, $20, $21, $22)
          ON CONFLICT (project_id, version) DO UPDATE SET
             unit = excluded.unit, layout = excluded.layout, code_total = excluded.code_total,
             code_matching = excluded.code_matching, code_nonmatching = excluded.code_nonmatching,
@@ -779,12 +788,13 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
             prev_data_done = excluded.prev_data_done, areas_json = excluded.areas_json,
             last_report_at = excluded.last_report_at, last_commit = excluded.last_commit,
             last_message = excluded.last_message, commits_json = '{}',
-            functions_total = excluded.functions_total, functions_matched = excluded.functions_matched",
+            functions_total = excluded.functions_total, functions_matched = excluded.functions_matched,
+            code_linked = excluded.code_linked, prev_code_linked = excluded.prev_code_linked",
         &[
             &project.id, &version, &r.unit, &r.layout.as_str(), &big(r.code.total), &big(r.code.matching),
             &big(r.code.non_matching), &big(r.data.total), &big(r.data.done), &big(prev.0.total), &big(prev.0.matching),
             &big(prev.0.non_matching), &big(prev.1.total), &big(prev.1.done), &areas_json, &t, &r.commit, &r.message,
-            &big(r.functions.total), &big(r.functions.matching),
+            &big(r.functions.total), &big(r.functions.matching), &big(r.code.linked), &big(prev.0.linked),
         ],
     )?;
     insert_report_row(&mut tx, project.id, r, t)?;
@@ -828,7 +838,7 @@ fn insert_history(c: &mut impl GenericClient, project_id: i64, r: &Report, at: i
 
 pub fn reports_for_project(c: &mut Conn, project_id: i64, version: &str, limit: usize) -> anyhow::Result<Vec<ReportRow>> {
     let rows = c.query(
-        "SELECT created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message
+        "SELECT created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message, code_linked
          FROM reports WHERE project_id = $1 AND version = $2 ORDER BY created_at DESC LIMIT $3",
         &[&project_id, &version, &(limit as i64)],
     )?;
@@ -837,7 +847,7 @@ pub fn reports_for_project(c: &mut Conn, project_id: i64, version: &str, limit: 
         .map(|r| {
             Ok(ReportRow {
                 created_at: r.try_get(0)?,
-                code: CodeStats { total: unsigned(r, 1)?, matching: unsigned(r, 2)?, non_matching: unsigned(r, 3)? },
+                code: CodeStats { total: unsigned(r, 1)?, matching: unsigned(r, 2)?, non_matching: unsigned(r, 3)?, linked: unsigned(r, 8)? },
                 data: DataStats { total: unsigned(r, 4)?, done: unsigned(r, 5)? },
                 commit: r.try_get(6)?,
                 message: r.try_get(7)?,
@@ -1068,7 +1078,7 @@ pub struct FeedItem {
 
 const FEED_SQL: &str = "SELECT r.id, r.created_at, r.version, r.code_total, r.code_matching, r.code_nonmatching,
         r.data_total, r.data_done, r.commit_hash, r.message, p.slug, p.name, p.repo,
-        prev.code_total, prev.code_matching, prev.code_nonmatching, p.repo_host, p.repo_url
+        prev.code_total, prev.code_matching, prev.code_nonmatching, p.repo_host, p.repo_url, r.code_linked
     FROM reports r
     JOIN projects p ON p.id = r.project_id
     JOIN users u ON u.id = p.owner_id
@@ -1084,7 +1094,7 @@ fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
         report_id: r.try_get(0)?,
         created_at: r.try_get(1)?,
         version: r.try_get(2)?,
-        code: CodeStats { total: unsigned(r, 3)?, matching: unsigned(r, 4)?, non_matching: unsigned(r, 5)? },
+        code: CodeStats { total: unsigned(r, 3)?, matching: unsigned(r, 4)?, non_matching: unsigned(r, 5)?, linked: unsigned(r, 18)? },
         data: DataStats { total: unsigned(r, 6)?, done: unsigned(r, 7)? },
         commit: r.try_get(8)?,
         message: r.try_get(9)?,
@@ -1098,6 +1108,7 @@ fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
                 total: total.max(0) as u64,
                 matching: unsigned(r, 14)?,
                 non_matching: unsigned(r, 15)?,
+                linked: 0,
             }),
             None => None,
         },

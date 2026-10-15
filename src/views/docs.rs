@@ -202,6 +202,7 @@ fn report_format(base_url: &str) -> Markup {
                 tr { td { code { "code.total" } } td { "Total amount of code." } }
                 tr { td { code { "code.matching" } } td { "Code decompiled and matching the original binary." } }
                 tr { td { code { "code.non_matching" } } td { "Code decompiled to equivalent but only partially matching source." } }
+                tr { td { code { "code.linked" } } td { "Code in fully linked units: built entirely from decompiled source, with nothing taken from the original binary. Counted separately from the two above, and optional (objdiff's " code { "complete_code" } ")." } }
                 tr { td { code { "data.total" } ", " code { "data.done" } } td { "Data (tables, assets, strings…) total and decompiled. Optional." } }
                 tr { td { code { "functions.total" } ", " code { "functions.matching" } } td { "Function counts, shown on the project page and the functions badge. Optional." } }
                 tr { td { code { "unit" } } td { "Label for the numbers, e.g. " code { "bytes" } " or " code { "functions" } " (default " code { "bytes" } ")." } }
@@ -266,6 +267,7 @@ fn objdiff(base_url: &str, app_slug: Option<&str>) -> Markup {
             tbody {
                 tr { td { "matched code" } td { "matching code" } }
                 tr { td { "fuzzy match beyond matched code" } td { "partially matching code (an estimate: objdiff has no exact figure for it)" } }
+                tr { td { "complete code (units marked complete)" } td { "fully linked code" } }
                 tr { td { "matched data" } td { "data" } }
                 tr { td { "matched / total functions" } td { "functions" } }
                 tr { td { code { "progress_categories" } } td { "areas, with their units inside" } }
@@ -345,6 +347,7 @@ fn badges(base_url: &str) -> Markup {
                 tr { td { code { "/badge/{slug}/matching.svg" } } td { "Matching code." } }
                 tr { td { code { "/badge/{slug}/data.svg" } } td { "Data, or \"n/a\" if the project doesn't report it." } }
                 tr { td { code { "/badge/{slug}/functions.svg" } } td { "Matched / total functions, or \"n/a\"." } }
+                tr { td { code { "/badge/{slug}/linked.svg" } } td { "Fully linked code, or \"n/a\"." } }
             }
         }
         pre.code { "[![Decompiled](" (base_url) "/badge/{slug}.svg)](" (base_url) "/projects/{slug})" }

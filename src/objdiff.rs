@@ -4,6 +4,7 @@
 //! - matched code -> matching
 //! - fuzzy match minus matched code -> partially matching (objdiff has no exact "decompiled but
 //!   not matching" figure; the fuzzy percentage is the closest it reports)
+//! - complete code (fully linked units) -> linked
 //! - matched data -> data done
 //! - categories (`progress_categories`) -> areas, with their units nested inside
 
@@ -48,6 +49,8 @@ pub struct Measures {
     total_code: u64,
     #[serde(default, deserialize_with = "num", alias = "matchedCode")]
     matched_code: u64,
+    #[serde(default, deserialize_with = "num", alias = "completeCode")]
+    complete_code: u64,
     #[serde(default, deserialize_with = "num", alias = "totalData")]
     total_data: u64,
     #[serde(default, deserialize_with = "num", alias = "matchedData")]
@@ -77,7 +80,12 @@ impl Measures {
         let total = self.total_code;
         let matching = self.matched_code.min(total);
         let fuzzy = ((self.fuzzy_match_percent.clamp(0.0, 100.0) / 100.0) * total as f64).round() as u64;
-        CodeStats { total, matching, non_matching: fuzzy.saturating_sub(matching).min(total - matching) }
+        CodeStats {
+            total,
+            matching,
+            non_matching: fuzzy.saturating_sub(matching).min(total - matching),
+            linked: self.complete_code.min(total),
+        }
     }
     fn functions(&self) -> Option<FunctionStats> {
         (self.total_functions > 0)
@@ -211,7 +219,7 @@ mod tests {
     #[test]
     fn converts_objdiff_report() {
         let body = br#"{
-            "measures": {"fuzzy_match_percent": 60.0, "total_code": "1000", "matched_code": "500", "matched_functions": 4,
+            "measures": {"fuzzy_match_percent": 60.0, "total_code": "1000", "matched_code": "500", "complete_code": "300", "matched_functions": 4,
                          "total_data": "200", "matched_data": "50", "total_functions": 10},
             "units": [
                 {"name": "main/src/a", "measures": {"total_code": "600", "matched_code": "500", "fuzzy_match_percent": 90.0},
@@ -226,7 +234,7 @@ mod tests {
         assert!(looks_like_objdiff(body));
         let report: Report = serde_json::from_slice(body).unwrap();
         let r = report.into_input(Some("abc1234".into()), None).normalize().unwrap();
-        assert_eq!(r.code, CodeStats { total: 1000, matching: 500, non_matching: 100 });
+        assert_eq!(r.code, CodeStats { total: 1000, matching: 500, non_matching: 100, linked: 300 });
         assert_eq!(r.data, DataStats { total: 200, done: 50 });
         assert_eq!(r.functions, FunctionStats { total: 10, matching: 4 });
         assert_eq!(r.areas.len(), 2);

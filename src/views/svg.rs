@@ -102,6 +102,9 @@ fn area_tooltip(a: &Area, unit: &str) -> String {
         fmt_pct(a.code.non_matching_pct()),
         fmt_count(a.code.total)
     );
+    if a.code.linked > 0 {
+        let _ = write!(t, "\nFully linked: {}", fmt_pct(a.code.linked_pct()));
+    }
     if a.functions.total > 0 {
         let _ = write!(t, "\nFunctions: {}/{} matching", fmt_count(a.functions.matching), fmt_count(a.functions.total));
     }
@@ -169,7 +172,7 @@ pub fn treemap(areas: &[Area], unit: &str) -> String {
     out
 }
 
-/// Line chart of matching %, decompiled % and data % over time.
+/// Line chart of matching %, decompiled %, data % and fully linked % over time.
 /// At most this many points are drawn; longer histories are thinned out evenly.
 const MAX_POINTS: usize = 600;
 
@@ -212,13 +215,15 @@ pub fn history(all_rows: &[ReportRow]) -> String {
     let _ = write!(out, r#"<text class="h-axis" x="{}" y="{}" text-anchor="end">{}</text>"#, W - R, H - 6.0, &human_date(t1)[..10]);
 
     let has_data = rows.iter().any(|r| r.data.total > 0);
-    let series: [(&str, &dyn Fn(&ReportRow) -> f64); 3] = [
+    let has_linked = rows.iter().any(|r| r.code.linked > 0);
+    let series: [(&str, &dyn Fn(&ReportRow) -> f64); 4] = [
         ("h-decomp", &|r: &ReportRow| r.code.decompiled_pct()),
         ("h-match", &|r: &ReportRow| r.code.matching_pct()),
         ("h-data", &|r: &ReportRow| r.data.pct()),
+        ("h-linked", &|r: &ReportRow| r.code.linked_pct()),
     ];
     for (class, f) in series {
-        if class == "h-data" && !has_data {
+        if (class == "h-data" && !has_data) || (class == "h-linked" && !has_linked) {
             continue;
         }
         // Step line: progress holds until the next report.
@@ -242,7 +247,7 @@ pub fn history(all_rows: &[ReportRow]) -> String {
     out.push_str("</svg>");
 
     // The data behind the chart, for app.js's hover tooltip: geometry, then one
-    // [time, decompiled %, matching %, data % or null, commit] row per report.
+    // [time, decompiled %, matching %, data % or null, commit, fully linked % or null] row per report.
     let points: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -253,6 +258,7 @@ pub fn history(all_rows: &[ReportRow]) -> String {
                 round(r.code.matching_pct()),
                 if has_data { Some(round(r.data.pct())) } else { None },
                 r.commit.as_deref().map(|c| &c[..7.min(c.len())]),
+                if has_linked { Some(round(r.code.linked_pct())) } else { None },
             ])
         })
         .collect();

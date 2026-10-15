@@ -64,7 +64,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
                             .map(|k| AreaInput {
                                 name: format!("{zone} part {}", k + 1),
                                 description: None,
-                                code: Some(CodeStats { total: total / 4, matching: matching / 4, non_matching: non_matching / 4 }),
+                                code: Some(CodeStats { total: total / 4, matching: matching / 4, non_matching: non_matching / 4, linked: matching / 8 }),
                                 data: None,
                                 functions: Some(FunctionStats { total: total / 1600, matching: matching / 1600 }),
                                 weight: None,
@@ -77,7 +77,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
                     AreaInput {
                         name: if a == 0 { zone.to_string() } else { format!("Overlay {a}") },
                         description: Some("Demo area".into()),
-                        code: if children.is_empty() { Some(CodeStats { total, matching, non_matching }) } else { None },
+                        code: if children.is_empty() { Some(CodeStats { total, matching, non_matching, linked: matching / 2 }) } else { None },
                         data: Some(DataStats { total: total / 4, done: (total as f64 / 4.0 * p) as u64 }),
                         functions: children.is_empty().then(|| FunctionStats { total: total / 400, matching: matching / 400 }),
                         weight: None,

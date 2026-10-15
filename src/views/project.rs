@@ -83,6 +83,11 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                         li { span.sw.nonmatching {} b { (fmt_pct(p.code.non_matching_pct())) } " partially matching" }
                         li { span.sw.none {} b { (fmt_pct(100.0 - p.code.decompiled_pct())) } " to do" }
                     }
+                    @if p.code.linked > 0 {
+                        p.stat-linked title="Code in units built entirely from decompiled source, with nothing taken from the original binary" {
+                            span.sw.linked {} b { (fmt_pct(p.code.linked_pct())) } " fully linked"
+                        }
+                    }
                 }
                 @if p.data.total > 0 {
                     div.stat-card {
@@ -142,6 +147,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     span { span.sw.decomp {} "Decompiled" }
                     span { span.sw.matching {} "Matching" }
                     @if p.data.total > 0 { span { span.sw.data {} "Data" } }
+                    @if reports.iter().any(|r| r.code.linked > 0) { span { span.sw.linked {} "Fully linked" } }
                 }
                 (PreEscaped(svg::history(reports)))
             }
@@ -290,6 +296,9 @@ fn badge_list(p: &Project) -> Vec<(String, &'static str)> {
     }
     if p.functions.total > 0 {
         list.push((format!("/badge/{}/functions.svg", p.slug), "Functions"));
+    }
+    if p.code.linked > 0 {
+        list.push((format!("/badge/{}/linked.svg", p.slug), "Fully linked"));
     }
     list
 }
