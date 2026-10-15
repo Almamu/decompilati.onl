@@ -37,6 +37,7 @@ fn router(state: AppState) -> Router {
     let public = Router::new()
         .route("/", get(public::home))
         .route("/projects", get(public::projects))
+        .route("/highlights", get(public::highlights))
         .route("/platforms", get(public::platforms_index))
         .route("/platform/{slug}", get(public::platform))
         .route("/projects/{slug}", get(public::project))

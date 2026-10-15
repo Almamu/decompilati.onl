@@ -153,6 +153,9 @@ CREATE INDEX import_jobs_status ON import_jobs(status, id);
 "#, r#"
 ALTER TABLE import_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'github';
 ALTER TABLE import_jobs ADD COLUMN source TEXT;
+"#, r#"
+ALTER TABLE projects ADD COLUMN ai_contributions TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects DROP COLUMN website;
 "#];
 
 #[derive(Debug, Clone)]
@@ -175,7 +178,8 @@ pub struct Project {
     pub name: String,
     pub platform: String,
     pub repo: String,
-    pub website: Option<String>,
+    /// Whether the project accepts AI-assisted contributions (see `AI_CONTRIBUTIONS`).
+    pub ai_contributions: String,
     pub description: String,
     pub image: Option<String>,
     pub ai_generated: bool,
@@ -229,12 +233,12 @@ pub struct ProjectMeta {
     pub name: String,
     pub platform: String,
     pub repo: String,
-    pub website: Option<String>,
+    pub ai_contributions: String,
     pub description: String,
     pub ai_generated: bool,
 }
 
-const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platform, p.repo, p.website, p.description,
+const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platform, p.repo, p.ai_contributions, p.description,
     p.image, p.ai_generated, p.spotlight, p.hidden, p.api_key_prefix, p.unit, p.layout,
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
@@ -250,7 +254,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         name: r.get(4)?,
         platform: r.get(5)?,
         repo: r.get(6)?,
-        website: r.get(7)?,
+        ai_contributions: r.get(7)?,
         description: r.get(8)?,
         image: r.get(9)?,
         ai_generated: r.get(10)?,
@@ -438,19 +442,19 @@ pub fn slug_taken(c: &Conn, slug: &str, except_id: i64) -> anyhow::Result<bool> 
 pub fn insert_project(c: &Conn, owner_id: i64, m: &ProjectMeta, image: &str, key_hash: &str, key_prefix: &str) -> anyhow::Result<i64> {
     let t = now();
     c.execute(
-        "INSERT INTO projects (slug, owner_id, name, platform, repo, website, description, ai_generated, image,
+        "INSERT INTO projects (slug, owner_id, name, platform, repo, ai_contributions, description, ai_generated, image,
                                api_key_hash, api_key_prefix, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-        params![m.slug, owner_id, m.name, m.platform, m.repo, m.website, m.description, m.ai_generated, image, key_hash, key_prefix, t],
+        params![m.slug, owner_id, m.name, m.platform, m.repo, m.ai_contributions, m.description, m.ai_generated, image, key_hash, key_prefix, t],
     )?;
     Ok(c.last_insert_rowid())
 }
 
 pub fn update_project_meta(c: &Conn, id: i64, m: &ProjectMeta) -> anyhow::Result<()> {
     c.execute(
-        "UPDATE projects SET slug = ?2, name = ?3, platform = ?4, repo = ?5, website = ?6, description = ?7,
+        "UPDATE projects SET slug = ?2, name = ?3, platform = ?4, repo = ?5, ai_contributions = ?6, description = ?7,
                              ai_generated = ?8, updated_at = ?9 WHERE id = ?1",
-        params![id, m.slug, m.name, m.platform, m.repo, m.website, m.description, m.ai_generated, now()],
+        params![id, m.slug, m.name, m.platform, m.repo, m.ai_contributions, m.description, m.ai_generated, now()],
     )?;
     Ok(())
 }
@@ -907,3 +911,11 @@ pub fn finish_import_job(c: &Conn, id: i64, error: Option<&str>) -> anyhow::Resu
 pub fn import_job_source(c: &Conn, id: i64) -> anyhow::Result<(String, Option<String>)> {
     Ok(c.query_row("SELECT kind, source FROM import_jobs WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?)
 }
+
+/// Values of `projects.ai_contributions`, with their labels. Empty means "not stated".
+pub const AI_CONTRIBUTIONS: &[(&str, &str)] = &[
+    ("", "Not stated"),
+    ("welcome", "Welcome"),
+    ("disclosed", "Accepted if disclosed"),
+    ("forbidden", "Not accepted"),
+];

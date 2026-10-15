@@ -18,7 +18,7 @@ pub struct ProjectForm {
     #[serde(default)]
     pub repo: String,
     #[serde(default)]
-    pub website: String,
+    pub ai_contributions: String,
     #[serde(default)]
     pub description: String,
     /// Version shown on cards and listings (edit form only, when several have reported).
@@ -34,7 +34,7 @@ impl ProjectForm {
             name: p.name.clone(),
             platform: p.platform.clone(),
             repo: p.repo.clone(),
-            website: p.website.clone().unwrap_or_default(),
+            ai_contributions: p.ai_contributions.clone(),
             description: p.description.clone(),
             ai_generated: p.ai_generated.then(|| "on".into()),
             default_version: Some(p.default_version.clone()),
@@ -129,8 +129,12 @@ fn form_fields(f: &ProjectForm, repos: &RepoOptions) -> Markup {
             }
         }
         (repo_field(f, repos))
-        label { "Website " span.muted { "(optional)" }
-            input type="url" name="website" value=(f.website) maxlength="300" placeholder="https://";
+        label { "AI contributions " span.muted { "(does the project accept contributions made with AI tools?)" }
+            select name="ai_contributions" {
+                @for (value, label) in crate::db::AI_CONTRIBUTIONS {
+                    option value=(value) selected[f.ai_contributions == *value] { (label) }
+                }
+            }
         }
         label { "Description"
             textarea name="description" rows="4" maxlength="2000" { (f.description) }

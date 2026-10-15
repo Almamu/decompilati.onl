@@ -58,13 +58,6 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
         let mut visible: Vec<&Project> = all.iter().filter(|p| is_visible(p, threshold)).collect();
         hot_sort(&mut visible);
 
-        // Highlights: admin-pinned projects first, then the most upvoted ones.
-        let mut spotlight: Vec<&Project> = visible.iter().copied().filter(|p| p.spotlight).collect();
-        let mut rated: Vec<&Project> = visible.iter().copied().filter(|p| !p.spotlight && p.score() > 0).collect();
-        rated.sort_by_key(|p| (-p.score(), -p.upvotes, -(p.last_report_at.unwrap_or(0))));
-        spotlight.extend(rated);
-        spotlight.truncate(3);
-
         let base: HashMap<i64, _> = baselines.into_iter().collect();
         let mut movers: Vec<(&Project, f64)> = visible
             .iter()
@@ -82,7 +75,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
                 visible.len()
             ),
             image: None,
-            body: views::home::home(&spotlight, &movers, &visible, visible.len()),
+            body: views::home::home(&movers, &visible, visible.len()),
             canonical: Some("/".into()),
             json_ld: Some(serde_json::json!({
                 "@context": "https://schema.org",
@@ -248,6 +241,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "platform": p.platform,
             "repo": p.repo,
             "ai_generated": p.ai_generated,
+            "ai_contributions": if p.ai_contributions.is_empty() { None } else { Some(&p.ai_contributions) },
             "unit": p.unit,
             "code": p.code,
             "data": p.data,
@@ -469,6 +463,7 @@ pub async fn sitemap(State(state): State<AppState>, headers: HeaderMap) -> AppRe
         };
         url("/", latest);
         url("/projects", latest);
+        url("/highlights", latest);
         url("/platforms", latest);
         for page in views::docs::PAGES {
             url(&views::docs::path(page), None);
@@ -546,4 +541,33 @@ pub async fn legacy_or_not_found(State(state): State<AppState>, uri: axum::http:
         [(header::LOCATION, target), (header::CACHE_CONTROL, "public, max-age=3600".to_string())],
     )
         .into_response())
+}
+
+/// Highlighted projects: admin-pinned ones first, then the most upvoted.
+fn pick_highlights<'a>(visible: &[&'a Project], max: usize) -> Vec<&'a Project> {
+    let mut picked: Vec<&Project> = visible.iter().copied().filter(|p| p.spotlight).collect();
+    let mut rated: Vec<&Project> = visible.iter().copied().filter(|p| !p.spotlight && p.score() > 0).collect();
+    rated.sort_by_key(|p| (-p.score(), -p.upvotes, -(p.last_report_at.unwrap_or(0))));
+    picked.extend(rated);
+    picked.truncate(max);
+    picked
+}
+
+/// `GET /highlights`
+pub async fn highlights(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    cached(&state, &headers, "/highlights".into(), || async {
+        let all = state.db.run(db::public_projects_owned).await?;
+        let threshold = state.config.hide_threshold;
+        let visible: Vec<&Project> = all.iter().filter(|p| is_visible(p, threshold)).collect();
+        let picked = pick_highlights(&visible, 12);
+        let html = views::layout::render(Page {
+            title: "Highlights",
+            description: "Decompilation projects picked by the admins and the most upvoted by the community.",
+            body: views::home::highlights(&picked),
+            canonical: Some("/highlights".into()),
+            ..Default::default()
+        });
+        Ok(CachedPage::new(html, HTML))
+    })
+    .await
 }

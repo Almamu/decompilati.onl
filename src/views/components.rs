@@ -116,7 +116,7 @@ pub fn vote(p: &Project) -> Markup {
 
 pub fn card(p: &Project, extra: Option<Markup>) -> Markup {
     html! {
-        article.card {
+        article.card data-search=(search_text(p)) {
             a.card-cover href={ "/projects/" (p.slug) } tabindex="-1" { (cover(p, false)) }
             div.card-body {
                 div.card-head {
@@ -162,4 +162,10 @@ pub fn legend() -> Markup {
             li { span.sw.none {} "Not decompiled" }
         }
     }
+}
+
+/// Lower-case text the search box matches against: name, platform and repository.
+pub fn search_text(p: &Project) -> String {
+    let plat = platforms::get_or_other(&p.platform);
+    format!("{} {} {} {} {}", p.name, plat.short, plat.name, p.repo, p.slug).to_lowercase()
 }

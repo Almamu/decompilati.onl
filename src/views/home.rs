@@ -9,21 +9,16 @@ use crate::{
     views::components::{ai_badge, card, card_grid, cover, last_change, legend, platform_chip, progress, vote},
 };
 
-pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Project], total: usize) -> Markup {
+pub fn home(movers: &[(&Project, f64)], projects: &[&Project], total: usize) -> Markup {
     html! {
         section.hero {
             h1 { "Tracking the progress of game decompilation projects" }
             p.lead {
                 (total) " projects reverse-engineering games back into source code."
             }
-        }
-
-        @if !spotlight.is_empty() {
-            section {
-                h2.section-title { "Highlights " span.muted { "· most upvoted by the community" } }
-                div.spotlight {
-                    @for p in spotlight { (spotlight_card(p)) }
-                }
+            div.home-tools {
+                (search_box())
+                a.btn.btn-ghost href="/highlights" { "★ Highlights" }
             }
         }
 
@@ -138,6 +133,7 @@ pub fn listing(title: &str, intro: Option<&str>, projects: &[&Project], hidden: 
         section {
             h1 { (title) }
             @if let Some(i) = intro { p.lead { (i) } }
+            (search_box())
             (platform_nav(active_platform, all))
             (legend())
             (card_grid(projects))
@@ -160,6 +156,34 @@ pub fn platforms_page(counts: &[(&'static platforms::Platform, usize)]) -> Marku
                     span.chip.big style={ "--chip:" (p.color) } { (p.short) }
                     span.pname { (p.name) span.muted { " · " (p.maker) } }
                     span.pcount { (n) " project" @if *n != 1 { "s" } }
+                }
+            }
+        }
+    }
+}
+
+/// Filters the project cards on the page as you type (handled by app.js).
+pub fn search_box() -> Markup {
+    html! {
+        div.search hidden {
+            input #project-search type="search" placeholder="Search projects by name, platform or repository…"
+                aria-label="Search projects" autocomplete="off";
+            p #search-empty.muted hidden { "No projects match your search." }
+        }
+    }
+}
+
+/// `/highlights`: projects pinned by admins first, then the most upvoted.
+pub fn highlights(spotlight: &[&Project]) -> Markup {
+    html! {
+        section {
+            h1 { "Highlights" }
+            p.lead { "Projects picked by the site's admins, then the ones the community upvoted the most." }
+            @if spotlight.is_empty() {
+                p.muted { "Nothing here yet: projects show up once they get upvotes. " a href="/" { "Browse all projects" } "." }
+            } @else {
+                div.spotlight {
+                    @for p in spotlight { (spotlight_card(p)) }
                 }
             }
         }

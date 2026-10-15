@@ -62,15 +62,6 @@ pub fn valid_slug(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
-/// Accepts only http(s) URLs so user content can never produce `javascript:` links.
-pub fn clean_url(s: &str) -> Option<String> {
-    let s = s.trim();
-    if s.len() > 300 || s.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return None;
-    }
-    (s.starts_with("https://") || s.starts_with("http://")).then(|| s.to_string())
-}
-
 /// Formats an RFC 3339 timestamp for `<time datetime>`.
 pub fn iso_time(ts: i64) -> String {
     time::OffsetDateTime::from_unix_timestamp(ts)

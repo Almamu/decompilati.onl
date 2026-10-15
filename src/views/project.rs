@@ -32,8 +32,10 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 h1 { (p.name) }
                 p.links {
                     a href={ "https://github.com/" (p.repo) } rel="noopener" { "github.com/" (p.repo) }
-                    @if let Some(w) = &p.website { " · " a href=(w) rel="noopener nofollow ugc" { "Website" } }
                     " · by " a href={ "https://github.com/" (p.owner_login) } rel="noopener" { "@" (p.owner_login) }
+                }
+                @if let Some((value, label)) = crate::db::AI_CONTRIBUTIONS.iter().find(|(v, _)| !v.is_empty() && *v == p.ai_contributions) {
+                    p.ai-policy { span class={ "policy policy-" (value) } title="Whether the project accepts contributions made with AI tools" { "AI contributions: " strong { (label) } } }
                 }
                 @if !p.description.is_empty() { p.desc.pre { (p.description) } }
                 (vote(p))

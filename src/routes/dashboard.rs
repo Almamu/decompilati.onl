@@ -14,7 +14,7 @@ use crate::{
     cache::membership_paths,
     db::{self, Project, ProjectMeta},
     images, platforms,
-    util::{clean_url, new_api_key, slugify, valid_slug},
+    util::{new_api_key, slugify, valid_slug},
     views::{
         self,
         dashboard::{ProjectForm, RepoOptions},
@@ -113,10 +113,10 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
     if repo.split('/').next().is_some_and(crate::util::is_reserved_name) {
         return Err("Repositories owned by an account with a name reserved for this site's pages can't be registered.".into());
     }
-    let website = match f.website.trim() {
-        "" => None,
-        w => Some(clean_url(w).ok_or("Website must be an http(s) URL.")?),
-    };
+    let ai_contributions = f.ai_contributions.trim().to_string();
+    if !crate::db::AI_CONTRIBUTIONS.iter().any(|(v, _)| *v == ai_contributions) {
+        return Err("Pick an option for AI contributions.".into());
+    }
     let description: String = f
         .description
         .chars()
@@ -135,7 +135,7 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         name,
         platform: f.platform.clone(),
         repo,
-        website,
+        ai_contributions,
         description,
         ai_generated: f.ai_generated.is_some(),
     })
@@ -157,7 +157,7 @@ async fn read_new_project_form(mut mp: Multipart) -> AppResult<(ProjectForm, Opt
             "name" => f.name = value,
             "platform" => f.platform = value,
             "repo" => f.repo = value,
-            "website" => f.website = value,
+            "ai_contributions" => f.ai_contributions = value,
             "description" => f.description = value,
             "ai_generated" => f.ai_generated = Some(value),
             _ => {}

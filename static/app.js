@@ -190,10 +190,45 @@
     });
   }
 
+  // Search box: filters the project cards on the page. Every word must match the card's
+  // name, platform or repository; sections left without cards are hidden too.
+  function initSearch() {
+    var input = document.getElementById("project-search");
+    if (!input) return;
+    var box = input.closest(".search"), empty = document.getElementById("search-empty");
+    var cards = [].slice.call(document.querySelectorAll("article.card[data-search]"));
+    box.hidden = false;
+    function apply() {
+      var words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+      var shown = 0;
+      cards.forEach(function (c) {
+        var ok = words.every(function (w) { return c.dataset.search.indexOf(w) !== -1; });
+        c.hidden = !ok;
+        if (ok) shown++;
+      });
+      document.querySelectorAll("main section").forEach(function (s) {
+        var inside = s.querySelectorAll("article.card[data-search]");
+        if (!inside.length) return;
+        s.hidden = words.length > 0 && ![].some.call(inside, function (c) { return !c.hidden; });
+      });
+      empty.hidden = !(words.length && shown === 0);
+    }
+    input.addEventListener("input", apply);
+    if (input.value) apply();
+    document.addEventListener("keydown", function (e) {
+      var tag = (document.activeElement && document.activeElement.tagName) || "";
+      if (e.key === "/" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+        e.preventDefault();
+        input.focus();
+      }
+    });
+  }
+
   function init() {
     relTimes();
     initCharts();
     initAreaToggles();
+    initSearch();
     // Only logged-in visitors (who carry the "li" hint cookie) need to hit the origin.
     if (!/(?:^|;\s*)li=1/.test(document.cookie)) { initVotes(null); return; }
     fetch("/api/me", { credentials: "same-origin" })
