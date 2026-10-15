@@ -386,18 +386,24 @@ pub fn admin(projects: &[Project], users: &[User], jobs: &[crate::db::ImportJob]
 
 /// One line describing an import job's state, for the project page and the admin list.
 fn import_job_status(job: &crate::db::ImportJob) -> Markup {
+    let auto = job.kind == "decompdev-auto";
     html! {
         @match job.status.as_str() {
             "queued" => p.notice {
                 (job_source(job)) " import queued"
                 @if job.queue_position > 0 { ": " (job.queue_position) " job(s) ahead of it" }
-                ". Reload the page to follow it."
+                ". "
+                @if let Some(e) = &job.error { (e) ". " }
+                "Reload the page to follow it."
             },
             "running" => p.notice {
                 (job_source(job)) " import running: " (job.runs_done) " of " (job.runs_total) " " (job_unit(job)) " checked, " (job.imported) " reports imported. Reload the page to update."
             },
             "failed" => p.notice.err {
                 "The last " (job_source(job)) " import failed after " (job.runs_done) " of " (job.runs_total) " " (job_unit(job)) ": " (job.error.as_deref().unwrap_or("unknown error"))
+            },
+            _ if auto && job.runs_total == 0 => p.notice {
+                "decomp.dev has no history for this repository, so there was nothing to import."
             },
             _ => p.notice.ok {
                 "Last " (job_source(job)) " import finished: " (job.runs_done) " " (job_unit(job)) " checked, " (job.imported) " reports imported"
@@ -409,9 +415,13 @@ fn import_job_status(job: &crate::db::ImportJob) -> Markup {
 }
 
 fn job_source(job: &crate::db::ImportJob) -> &'static str {
-    if job.kind == "decompdev" { "decomp.dev" } else { "GitHub Actions" }
+    match job.kind.as_str() {
+        "decompdev" => "decomp.dev",
+        "decompdev-auto" => "decomp.dev",
+        _ => "GitHub Actions",
+    }
 }
 
 fn job_unit(job: &crate::db::ImportJob) -> &'static str {
-    if job.kind == "decompdev" { "history entries" } else { "workflow runs" }
+    if job.kind.starts_with("decompdev") { "history entries" } else { "workflow runs" }
 }

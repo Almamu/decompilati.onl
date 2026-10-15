@@ -36,16 +36,27 @@ pub async fn start(state: &AppState, project: &db::Project, url: &str, user_id: 
     imports::queue(state, project, user_id, "decompdev", Some(format!("https://decomp.dev/{owner}/{repo}"))).await
 }
 
+/// Errors that mean "decomp.dev is unreachable or overloaded right now": the job retries later.
+fn transient(e: reqwest::Error) -> anyhow::Error {
+    let temporary = e.is_connect()
+        || e.is_timeout()
+        || e.status().is_some_and(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS);
+    if temporary { anyhow::Error::new(imports::Retryable(format!("decomp.dev is unreachable ({e})"))) } else { e.into() }
+}
+
 async fn get_json<T: serde::de::DeserializeOwned + Send + 'static>(state: &AppState, url: &str) -> anyhow::Result<T> {
     let body = state
         .http
         .get(url)
         .timeout(std::time::Duration::from_secs(120))
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .map_err(transient)?
+        .error_for_status()
+        .map_err(transient)?
         .bytes()
-        .await?;
+        .await
+        .map_err(transient)?;
     anyhow::ensure!(body.len() <= MAX_RESPONSE, "response from {url} is too large");
     let url = url.to_string();
     tokio::task::spawn_blocking(move || serde_json::from_slice(&body).map_err(|e| anyhow::anyhow!("unexpected response from {url}: {e}"))).await?
@@ -142,32 +153,36 @@ mod tests {
     }
 }
 
-/// Whether decomp.dev has progress for a repository (`owner/name`). Quick: new projects
-/// check this while being created.
-pub async fn has_project(state: &AppState, repo: &str) -> anyhow::Result<bool> {
-    let (owner, name) = repo.split_once('/').ok_or_else(|| anyhow::anyhow!("invalid repository"))?;
-    anyhow::ensure!(valid_name(owner) && valid_name(name), "invalid repository");
+/// Whether decomp.dev has progress for a repository (`owner/name`).
+async fn has_project(state: &AppState, owner: &str, name: &str) -> anyhow::Result<bool> {
     let res = state
         .http
         .get(format!("https://decomp.dev/{owner}/{name}.json"))
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30))
         .send()
-        .await?;
+        .await
+        .map_err(transient)?;
     if res.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(false);
     }
-    let summary: Summary = res.error_for_status()?.json().await?;
+    let summary: Summary = res.error_for_status().map_err(transient)?.json().await.map_err(transient)?;
     Ok(summary.report_versions.iter().any(|v| valid_version(v)))
 }
 
-/// After a project is created: if decomp.dev has it, queue an import of its history.
-/// Returns whether an import was queued.
-pub async fn import_if_listed(state: &AppState, project: &db::Project, user_id: i64) -> anyhow::Result<bool> {
-    if !has_project(state, &project.repo).await? {
+/// Queues the job that, for a newly created project, imports its decomp.dev history if
+/// decomp.dev has it. Never contacts decomp.dev itself, so creating a project doesn't
+/// depend on it being up.
+pub async fn queue_auto_import(state: &AppState, project: &db::Project, user_id: i64) -> Result<(), String> {
+    imports::queue(state, project, user_id, "decompdev-auto", Some(format!("https://decomp.dev/{}", project.repo))).await
+}
+
+/// Job body for `decompdev-auto`: check decomp.dev, then import if the project is there.
+/// Returns `false` when decomp.dev has nothing for it.
+pub async fn auto_import(state: &AppState, project: &db::Project, url: &str, job: i64) -> anyhow::Result<bool> {
+    let (owner, repo) = parse_url(url).ok_or_else(|| anyhow::anyhow!("invalid decomp.dev URL"))?;
+    if !has_project(state, &owner, &repo).await? {
         return Ok(false);
     }
-    imports::queue(state, project, user_id, "decompdev", Some(format!("https://decomp.dev/{}", project.repo)))
-        .await
-        .map_err(anyhow::Error::msg)?;
+    import(state, project, url, job).await?;
     Ok(true)
 }

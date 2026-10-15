@@ -1021,3 +1021,9 @@ pub fn project_feed_items(c: &mut Conn, project_id: i64, limit: usize) -> anyhow
     let sql = format!("{FEED_SQL} WHERE r.project_id = $1 ORDER BY r.created_at DESC, r.id DESC LIMIT $2");
     Ok(c.query(&sql, &[&project_id, &(limit as i64)])?.iter().map(feed_item_from_row).collect::<Result<_, _>>()?)
 }
+
+/// Puts a job back in the queue to be retried, keeping the reason visible.
+pub fn requeue_import_job(c: &mut Conn, id: i64, message: &str) -> anyhow::Result<()> {
+    c.execute("UPDATE import_jobs SET status = 'queued', error = $2 WHERE id = $1", &[&id, &message])?;
+    Ok(())
+}
