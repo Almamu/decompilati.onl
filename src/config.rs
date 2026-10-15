@@ -14,6 +14,8 @@ pub struct Config {
     /// unauthenticated rate limit of 60 requests/hour.
     pub github_api_token: Option<String>,
     pub cloudflare: Option<CloudflareConfig>,
+    /// GitHub App for decomp.dev-style artifact imports (optional).
+    pub github_app: Option<crate::github_app::GithubAppConfig>,
     /// GitHub logins with admin rights (spotlight, hide, ban).
     pub admins: Vec<String>,
     /// Projects whose vote score is at or below this value are hidden from listings.
@@ -44,6 +46,16 @@ impl Config {
             (Some(api_token), Some(zone_id)) => Some(CloudflareConfig { api_token, zone_id }),
             _ => None,
         };
+        let github_app = match (var("GITHUB_APP_ID"), var("GITHUB_APP_SLUG"), var("GITHUB_APP_WEBHOOK_SECRET"), var("GITHUB_APP_PRIVATE_KEY_FILE")) {
+            (Some(app_id), Some(slug), Some(webhook_secret), Some(key_file)) => Some(crate::github_app::GithubAppConfig {
+                app_id,
+                slug,
+                webhook_secret,
+                private_key_pem: std::fs::read_to_string(&key_file)
+                    .map_err(|e| anyhow::anyhow!("reading GITHUB_APP_PRIVATE_KEY_FILE {key_file}: {e}"))?,
+            }),
+            _ => None,
+        };
         Ok(Config {
             bind: var("BIND").unwrap_or_else(|| "127.0.0.1:8080".into()).parse()?,
             secure_cookies: base_url.starts_with("https://"),
@@ -56,6 +68,7 @@ impl Config {
             github_client_secret: var("GITHUB_CLIENT_SECRET").unwrap_or_default(),
             github_api_token: var("GITHUB_API_TOKEN"),
             cloudflare,
+            github_app,
             admins: var("ADMIN_LOGINS")
                 .unwrap_or_default()
                 .split(',')

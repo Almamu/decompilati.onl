@@ -119,16 +119,16 @@ pub async fn vote(State(state): State<AppState>, RequireUser(u): RequireUser, Js
         return Err(ApiError::bad("value must be -1, 0 or 1"));
     }
     if !state.limiter.check(&format!("vote:{}", u.user.id), 30, 60) {
-        return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "slow down".into()));
+        return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "You're voting too fast. Please wait a minute and try again.".into()));
     }
     let uid = u.user.id;
     let project = state
         .db
         .run(move |c| db::project_by_id(c, v.project_id))
         .await?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "project not found".into()))?;
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "This project no longer exists.".into()))?;
     if project.owner_id == uid {
-        return Err(ApiError(StatusCode::FORBIDDEN, "you can't vote on your own project".into()));
+        return Err(ApiError(StatusCode::FORBIDDEN, "You can't vote on your own project.".into()));
     }
     let pid = project.id;
     let (up, down) = state.db.run(move |c| db::vote(c, uid, pid, v.value)).await?;

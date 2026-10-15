@@ -49,7 +49,13 @@ const OBJDIFF_ACTION: &str = r#"- name: Generate progress report
   env:
     BASE: "#;
 
-pub fn docs(base_url: &str) -> Markup {
+const ARTIFACT_STEP: &str = r#"- name: Upload progress report
+  uses: actions/upload-artifact@v4
+  with:
+    name: us_report
+    path: report.json"#;
+
+pub fn docs(base_url: &str, app_slug: Option<&str>) -> Markup {
     html! {
         article.docs.narrow {
             h1 { "Progress API" }
@@ -94,6 +100,15 @@ pub fn docs(base_url: &str) -> Markup {
                 code { "Content-Encoding: gzip" } " (up to 64 MB per request)." }
             pre.code { (OBJDIFF_ACTION) (base_url) }
             p { "After each report, the project page lists the commits since the previous report, fetched from GitHub." }
+
+            @if let Some(slug) = app_slug {
+                h2 { "Automatic import with the GitHub App" }
+                p { "Projects that already upload the objdiff report as a GitHub Actions artifact for decomp.dev can keep their workflow unchanged. "
+                    "Register the project here, then " a href={ "https://github.com/apps/" (slug) "/installations/new" } rel="noopener" { "install the GitHub App" } " on the repository. "
+                    "When a workflow run on the default branch finishes successfully, its " code { "<version>_report" } " artifact is downloaded and imported, with the run's commit. "
+                    "If there are several versions, the first one alphabetically is used. Only JSON reports are supported, not binary protobuf ones." }
+                pre.code { (ARTIFACT_STEP) }
+            }
 
             h2 { "GitHub Actions example" }
             pre.code { (GH_ACTION) (base_url) }

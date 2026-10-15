@@ -4,6 +4,7 @@ mod auth;
 mod cache;
 mod config;
 mod github;
+mod github_app;
 mod db;
 mod images;
 mod objdiff;
@@ -68,6 +69,7 @@ fn router(state: AppState) -> Router {
         .route("/admin/p/{id}/hide", post(dashboard::admin_hide))
         .route("/admin/u/{id}/ban", post(dashboard::admin_ban))
         .route("/api/me", get(api::me))
+        .route("/api/github/webhook", post(github_app::webhook).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
         .route("/api/v1/vote", post(api::vote))
         // objdiff reports can be large (they may also arrive gzip-compressed).
         .route(

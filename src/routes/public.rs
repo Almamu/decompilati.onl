@@ -58,17 +58,12 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
         let mut visible: Vec<&Project> = all.iter().filter(|p| is_visible(p, threshold)).collect();
         hot_sort(&mut visible);
 
-        let mut spotlight: Vec<&Project> = visible.iter().copied().filter(|p| p.spotlight).take(3).collect();
-        if spotlight.is_empty() {
-            // No curated picks: feature the best-rated project that's been active recently.
-            spotlight = visible
-                .iter()
-                .copied()
-                .filter(|p| p.score() > 0 && p.last_report_at.is_some_and(|t| t >= since))
-                .max_by_key(|p| p.score())
-                .into_iter()
-                .collect();
-        }
+        // Highlights: admin-pinned projects first, then the most upvoted ones.
+        let mut spotlight: Vec<&Project> = visible.iter().copied().filter(|p| p.spotlight).collect();
+        let mut rated: Vec<&Project> = visible.iter().copied().filter(|p| !p.spotlight && p.score() > 0).collect();
+        rated.sort_by_key(|p| (-p.score(), -p.upvotes, -(p.last_report_at.unwrap_or(0))));
+        spotlight.extend(rated);
+        spotlight.truncate(3);
 
         let base: HashMap<i64, _> = baselines.into_iter().collect();
         let mut movers: Vec<(&Project, f64)> = visible
@@ -225,7 +220,7 @@ pub async fn docs(State(state): State<AppState>, headers: HeaderMap) -> AppResul
             title: "Progress API",
             description: "How to report decompilation progress from CI.",
             image: None,
-            body: views::docs::docs(&state.config.base_url),
+            body: views::docs::docs(&state.config.base_url, state.config.github_app.as_ref().map(|a| a.slug.as_str())),
         });
         Ok(CachedPage::new(html, HTML))
     })

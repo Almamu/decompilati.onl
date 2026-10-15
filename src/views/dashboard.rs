@@ -166,6 +166,7 @@ pub fn edit_project(
     notice: Option<&str>,
     new_key: Option<&str>,
     base_url: &str,
+    app_slug: Option<&str>,
 ) -> Markup {
     html! {
         section.narrow {
@@ -209,6 +210,15 @@ pub fn edit_project(
                 form method="post" action={ "/dashboard/p/" (p.id) "/key" } {
                     button.btn.btn-ghost type="submit" { "Regenerate API key" }
                     span.muted { " The current key stops working immediately." }
+                }
+            }
+
+            @if let Some(slug) = app_slug {
+                div.panel {
+                    h2 { "Automatic import (decomp.dev compatible)" }
+                    p { "If your CI uploads objdiff's " code { "report.json" } " as an artifact named " code { "<version>_report" } " (as decomp.dev required), install the GitHub App on "
+                        code { (p.repo) } ". Every successful workflow run on the default branch is then imported automatically, with no API key needed." }
+                    p { a.btn href={ "https://github.com/apps/" (slug) "/installations/new" } rel="noopener" { "Install the GitHub App" } }
                 }
             }
 

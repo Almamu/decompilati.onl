@@ -17,6 +17,18 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Pro
                 (total) " projects reverse-engineering games back into source code. "
                 "Progress is updated automatically by each project's CI."
             }
+        }
+
+        @if !spotlight.is_empty() {
+            section {
+                h2.section-title { "Highlights " span.muted { "· most upvoted by the community" } }
+                div.spotlight {
+                    @for p in spotlight { (spotlight_card(p)) }
+                }
+            }
+        }
+
+        section {
             div.about {
                 div {
                     h2 { "What's a decomp?" }
@@ -40,14 +52,6 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Pro
             (legend())
         }
 
-        @if !spotlight.is_empty() {
-            section {
-                h2.section-title { "Spotlight" }
-                div.spotlight {
-                    @for p in spotlight { (spotlight_card(p)) }
-                }
-            }
-        }
 
         @if !movers.is_empty() {
             section {

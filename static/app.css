@@ -156,7 +156,7 @@ section { margin-bottom: 36px; }
 .vote .up.on { color: var(--matching); }
 .vote .down.on { color: var(--danger); }
 .vote .score { min-width: 1.6em; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
-.project-info .vote { position: static; margin-top: 8px; }
+.project-info .vote { position: relative; margin-top: 8px; }
 
 /* project page */
 .project-head { display: grid; grid-template-columns: minmax(0, 420px) 1fr; gap: 24px; align-items: start; }
@@ -235,3 +235,9 @@ pre.select { user-select: all; white-space: pre-wrap; word-break: break-all; }
 .badge.ai.on-cover { position: absolute; left: 10px; bottom: 10px; font-size: .78rem; padding: 4px 10px; border-radius: 6px;
   letter-spacing: .03em; text-transform: uppercase; box-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
 .project-cover .badge.ai.on-cover { font-size: .9rem; padding: 6px 12px; }
+.vote { position: relative; }
+.vote-error { position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; width: max-content; max-width: 240px;
+  background: #3b1418; color: #ffd7d5; border: 1px solid var(--danger); border-radius: 8px; padding: 6px 10px;
+  font-size: .8rem; line-height: 1.35; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); white-space: normal; }
+.vote-error a { color: #fff; text-decoration: underline; }
+.project-info .vote-error { left: 0; right: auto; }

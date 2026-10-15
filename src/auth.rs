@@ -2,13 +2,13 @@
 
 use axum::{
     extract::{FromRequestParts, Query, State},
-    http::{header, request::Parts, HeaderMap, Method},
+    http::{header, request::Parts, HeaderMap, Method, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
 
 use crate::{
-    app::{AppError, AppResult, AppState},
+    app::{ApiError, AppError, AppResult, AppState},
     db::{self, User},
     util::{random_token, sha256_hex},
 };
@@ -84,6 +84,8 @@ impl FromRequestParts<AppState> for MaybeUser {
 pub enum AuthRejection {
     Login(String),
     Error(AppError),
+    /// For `/api/` requests: a JSON error the page's script can show.
+    Api(StatusCode, &'static str),
 }
 
 impl IntoResponse for AuthRejection {
@@ -93,6 +95,7 @@ impl IntoResponse for AuthRejection {
                 Redirect::to(&format!("/auth/github?next={}", urlencode(&next))).into_response()
             }
             AuthRejection::Error(e) => e.into_response(),
+            AuthRejection::Api(status, msg) => ApiError(status, msg.into()).into_response(),
         }
     }
 }
@@ -100,11 +103,17 @@ impl IntoResponse for AuthRejection {
 impl FromRequestParts<AppState> for RequireUser {
     type Rejection = AuthRejection;
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let api = parts.uri.path().starts_with("/api/");
         if !same_origin(parts, state) {
-            return Err(AuthRejection::Error(AppError::Forbidden("Cross-origin request rejected.".into())));
+            return Err(if api {
+                AuthRejection::Api(StatusCode::FORBIDDEN, "This request came from another site and was blocked.")
+            } else {
+                AuthRejection::Error(AppError::Forbidden("Cross-origin request rejected.".into()))
+            });
         }
         match load_user(parts, state).await.map_err(AuthRejection::Error)? {
             Some(u) => Ok(RequireUser(u)),
+            None if api => Err(AuthRejection::Api(StatusCode::UNAUTHORIZED, "Your session has expired. Please log in again.")),
             None => Err(AuthRejection::Login(
                 if parts.method == Method::GET { parts.uri.path().to_string() } else { "/dashboard".into() },
             )),

@@ -538,3 +538,8 @@ pub fn set_commits(c: &Conn, project_id: i64, for_commit: Option<&str>, commits_
         params![project_id, for_commit, commits_json],
     )? > 0)
 }
+
+/// Projects registered for a GitHub repository (`owner/name`, case-insensitive).
+pub fn projects_by_repo(c: &mut Conn, repo: &str) -> anyhow::Result<Vec<Project>> {
+    query_projects(c, "WHERE lower(p.repo) = lower(?1) AND u.is_banned = 0", [repo])
+}

@@ -46,6 +46,27 @@
     auth.appendChild(form);
   }
 
+  // Explains a failed vote right under the widget, so it's clear why it didn't count.
+  function showVoteError(widget, message, offerLogin) {
+    var box = widget.querySelector(".vote-error");
+    if (!box) {
+      box = el("div", { class: "vote-error", role: "alert" });
+      widget.appendChild(box);
+    }
+    box.textContent = message;
+    if (offerLogin) {
+      box.appendChild(document.createTextNode(" "));
+      box.appendChild(el("a", { href: loginUrl() }, "Log in"));
+    }
+    clearTimeout(widget._errTimer);
+    widget._errTimer = setTimeout(function () { hideVoteError(widget); }, 8000);
+  }
+
+  function hideVoteError(widget) {
+    var box = widget.querySelector(".vote-error");
+    if (box) box.remove();
+  }
+
   function setVoteState(widget, value) {
     widget.dataset.value = String(value);
     widget.querySelector(".up").classList.toggle("on", value === 1);
@@ -73,16 +94,27 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ project_id: parseInt(id, 10), value: next })
         })
-          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+          .then(function (r) {
+            return r.json().then(
+              function (j) { return { ok: r.ok, status: r.status, body: j }; },
+              function () { return { ok: false, status: r.status, body: {} }; }
+            );
+          })
           .then(function (res) {
-            if (!res.ok) { w.title = res.body.error || "Vote failed"; return; }
-            w.querySelector(".score").textContent = res.body.score;
-            setVoteState(w, next);
-            // Keep the same project in other widgets on the page in sync.
+            if (!res.ok) {
+              var msg = res.body.error || ("Your vote couldn't be saved (error " + res.status + ").");
+              showVoteError(w, msg, res.status === 401);
+              return;
+            }
+            hideVoteError(w);
+            // Keep the same project in every widget on the page in sync.
             document.querySelectorAll('.vote[data-project="' + id + '"]').forEach(function (o) {
               o.querySelector(".score").textContent = res.body.score;
               setVoteState(o, next);
             });
+          })
+          .catch(function () {
+            showVoteError(w, "Your vote couldn't be sent. Check your connection and try again.", false);
           })
           .finally(function () { up.disabled = down.disabled = false; });
       }

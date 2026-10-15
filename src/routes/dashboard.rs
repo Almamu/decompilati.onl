@@ -196,7 +196,7 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
 
 async fn edit_form_page(state: &AppState, u: &SessionUser, p: &Project, f: &ProjectForm, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {
     let repos = repo_options(state, u, &format!("/dashboard/p/{}", p.id)).await;
-    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url))
+    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, state.config.github_app.as_ref().map(|a| a.slug.as_str())))
 }
 
 async fn edit_page(state: &AppState, u: &SessionUser, p: &Project, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {
