@@ -265,6 +265,16 @@ pub fn edit_project(
                     p { "If your CI uploads objdiff's " code { "report.json" } " as an artifact named " code { "<version>_report" } " (as decomp.dev required), install the GitHub App on "
                         code { (p.repo) } ". Every successful workflow run on the default branch is then imported automatically, with no API key needed." }
                     p { a.btn href={ "https://github.com/apps/" (slug) "/installations/new" } rel="noopener" { "Install the GitHub App" } }
+                    h3 { "Which artifacts to import" }
+                    p.muted { "Several projects can use the same repository (one per game). Pick the artifacts that belong to this project, or turn the import off if it reports through the API." }
+                    @let mode = match p.app_artifacts.trim() { "*" => "all", "" => "off", _ => "list" };
+                    form.form method="post" action={ "/dashboard/p/" (p.id) "/app-artifacts" } {
+                        label.check { input type="radio" name="mode" value="all" checked[mode == "all"]; span { "Every " code { "<version>_report" } " artifact" } }
+                        label.check { input type="radio" name="mode" value="list" checked[mode == "list"]; span { "Only these artifacts:" } }
+                        input type="text" name="names" value=(if mode == "list" { p.app_artifacts.as_str() } else { "" }) placeholder="europe_report, usa_report" aria-label="Artifact names";
+                        label.check { input type="radio" name="mode" value="off" checked[mode == "off"]; span { "None: this project reports through the API" } }
+                        button.btn.btn-ghost type="submit" { "Save" }
+                    }
                 }
             }
 

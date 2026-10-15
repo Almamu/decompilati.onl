@@ -216,6 +216,13 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
         .await?
         .ok_or(AppError::NotFound)?;
     state.cache.invalidate(membership_paths(&project.slug, &project.platform));
+    // A repository can hold several games: if another project already uses this one, the
+    // GitHub App doesn't import its artifacts here until the owner picks which ones.
+    let pid = project.id;
+    let shared = project.is_github() && state.db.run(move |c| db::repo_shared(c, pid)).await.unwrap_or(false);
+    if shared {
+        state.db.run(move |c| db::set_app_artifacts(c, pid, "")).await?;
+    }
     // Projects that were on decomp.dev bring their history along, through a background job
     // so creating the project doesn't depend on decomp.dev being up.
     let auto_import = if project.is_github() { crate::decompdev::queue_auto_import(&state, &project, uid).await } else { Err(String::new()) };
@@ -428,4 +435,57 @@ pub async fn import_decompdev(
         Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("decomp.dev import queued. It runs in the background; reload this page to follow it."), None).await),
         Err(e) => Ok(edit_page(&state, &u, &p, Some(&e), None, None).await),
     }
+}
+
+#[derive(Deserialize)]
+pub struct AppArtifactsForm {
+    mode: String,
+    #[serde(default)]
+    names: String,
+}
+
+/// Normalises the GitHub App artifact setting: `*`, empty, or a comma-separated list of
+/// `<name>_report` artifact names.
+fn app_artifacts_value(f: &AppArtifactsForm) -> Result<String, &'static str> {
+    match f.mode.as_str() {
+        "all" => Ok("*".into()),
+        "off" => Ok(String::new()),
+        _ => {
+            let names: Vec<&str> = f.names.split([',', ' ', '\n']).map(str::trim).filter(|n| !n.is_empty()).collect();
+            if names.is_empty() {
+                return Err("List at least one artifact name, or choose another option.");
+            }
+            for n in &names {
+                let version = if *n == "report" { Some("") } else { n.strip_suffix("_report") };
+                if !version.is_some_and(crate::report::valid_version) {
+                    return Err("Artifact names must look like <version>_report, e.g. europe_report.");
+                }
+            }
+            Ok(names.join(","))
+        }
+    }
+}
+
+/// Chooses which GitHub Actions artifacts the GitHub App imports into the project.
+pub async fn set_app_artifacts(
+    State(state): State<AppState>,
+    RequireUser(u): RequireUser,
+    Path(id): Path<i64>,
+    Form(f): Form<AppArtifactsForm>,
+) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    let value = match app_artifacts_value(&f) {
+        Ok(v) => v,
+        Err(e) => return Ok(edit_page(&state, &u, &p, Some(e), None, None).await),
+    };
+    let v = value.clone();
+    let updated = state
+        .db
+        .run(move |c| {
+            db::set_app_artifacts(c, id, &v)?;
+            db::project_by_id(c, id)
+        })
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(edit_page(&state, &u, &updated, None, Some("Saved which artifacts the GitHub App imports."), None).await)
 }

@@ -179,6 +179,10 @@ CREATE INDEX projects_github_repo_id ON projects(github_repo_id);
 -- form (host/path) in repo.
 ALTER TABLE projects ADD COLUMN repo_host TEXT NOT NULL DEFAULT 'github';
 ALTER TABLE projects ADD COLUMN repo_url TEXT;
+"#, r#"
+-- Which GitHub Actions artifacts the GitHub App imports into a project: '*' for every
+-- <version>_report artifact, '' for none, or a comma-separated list of artifact names.
+ALTER TABLE projects ADD COLUMN app_artifacts TEXT NOT NULL DEFAULT '*';
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -246,9 +250,19 @@ pub struct Project {
     pub repo_host: String,
     /// For external repositories: their URL (`repo` holds a host/path display form).
     pub repo_url: Option<String>,
+    /// GitHub App artifact imports: `*` (every `<version>_report`), empty (off) or a list.
+    pub app_artifacts: String,
 }
 
 impl Project {
+    /// Whether the GitHub App should import this artifact into the project.
+    pub fn wants_artifact(&self, artifact: &str) -> bool {
+        match self.app_artifacts.trim() {
+            "*" => true,
+            "" => false,
+            list => list.split(',').any(|name| name.trim() == artifact),
+        }
+    }
     pub fn is_github(&self) -> bool {
         self.repo_host == "github"
     }
@@ -313,7 +327,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
     p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord, p.github_repo_id,
-    p.repo_host, p.repo_url";
+    p.repo_host, p.repo_url, p.app_artifacts";
 
 fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
     Ok(Project {
@@ -352,6 +366,7 @@ fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
         github_repo_id: r.try_get(39)?,
         repo_host: r.try_get(40)?,
         repo_url: r.try_get(41)?,
+        app_artifacts: r.try_get(42)?,
     })
 }
 
@@ -1154,4 +1169,22 @@ pub fn commit_link(host: &str, repo: &str, url: Option<&str>, sha: &str) -> Opti
         "bitbucket.org" => Some(format!("{url}/commits/{sha}")),
         _ => None,
     }
+}
+
+pub fn set_app_artifacts(c: &mut Conn, project_id: i64, value: &str) -> anyhow::Result<()> {
+    c.execute("UPDATE projects SET app_artifacts = $2 WHERE id = $1", &[&project_id, &value])?;
+    Ok(())
+}
+
+/// Whether another project already uses the same GitHub repository.
+pub fn repo_shared(c: &mut Conn, project_id: i64) -> anyhow::Result<bool> {
+    Ok(c
+        .query_one(
+            "SELECT EXISTS(
+                SELECT 1 FROM projects o, projects p
+                WHERE p.id = $1 AND o.id <> p.id AND p.repo_host = 'github' AND o.repo_host = 'github'
+                  AND (o.github_repo_id = p.github_repo_id OR lower(o.repo) = lower(p.repo)))",
+            &[&project_id],
+        )?
+        .try_get(0)?)
 }

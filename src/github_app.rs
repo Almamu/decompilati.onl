@@ -223,6 +223,7 @@ async fn try_import_run(
             Ok(by_id.into_iter().chain(by_name).collect::<Vec<_>>())
         })
         .await?;
+    let projects: Vec<db::Project> = projects.into_iter().filter(|p| !p.app_artifacts.trim().is_empty()).collect();
     if projects.is_empty() {
         return Ok(());
     }
@@ -297,7 +298,8 @@ async fn import_artifact(
     projects: &[db::Project],
 ) -> anyhow::Result<()> {
     let report = fetch_artifact_report(state, token, artifact, version, head_sha, message).await?;
-    for project in projects {
+    // Only into the projects that take this artifact (several can share a repository).
+    for project in projects.iter().filter(|p| p.wants_artifact(&artifact.name)) {
         if !state.limiter.check(&format!("progress:{}", project.id), 120, 3600) {
             continue;
         }
@@ -376,6 +378,9 @@ struct RunList {
 /// isn't installed on the repository or an import is already queued or running.
 pub async fn start_history_import(state: &AppState, project: &db::Project, user_id: i64) -> Result<(), String> {
     let app = state.config.github_app.clone().ok_or("The GitHub App isn't configured on this server.")?;
+    if project.app_artifacts.trim().is_empty() {
+        return Err("GitHub App imports are turned off for this project; choose which artifacts to import first.".into());
+    }
     installation_for_repo(state, &app, &project.repo)
         .await
         .map_err(|_| "Couldn't reach GitHub, please try again.".to_string())?
@@ -439,7 +444,7 @@ async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u
             }
         };
         let message = run.head_commit.as_ref().map(|c| c.message.clone());
-        for (version, artifact) in report_artifacts(&artifacts) {
+        for (version, artifact) in report_artifacts(&artifacts).into_iter().filter(|(_, a)| project.wants_artifact(&a.name)) {
             let report = match fetch_artifact_report(state, &token, artifact, &version, &run.head_sha, message.clone()).await {
                 Ok(r) => r,
                 Err(e) => {
