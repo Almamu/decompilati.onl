@@ -1,0 +1,15 @@
+[Unit]
+Description=decompilati.onl database backup
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=decompsite
+Group=decompsite
+ExecStart=/opt/decompilati.onl/deploy/backup.sh
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/backups/decompsite

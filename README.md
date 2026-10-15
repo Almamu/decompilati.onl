@@ -106,7 +106,10 @@ sudo systemctl enable --now decompsite
 ```
 
 Then put Caddy (`deploy/Caddyfile`) or nginx in front of it. A `Dockerfile` is also included.
-Back up the database with `pg_dump` (for example `pg_dump -Fc decompsite > backup.dump` from cron)
+The database is backed up daily by `deploy/backup.sh` (a compressed `pg_dump`, last 14 days kept in
+`/var/backups/decompsite`), run by `deploy/decompsite-backup.timer`:
+`sudo cp deploy/decompsite-backup.* /etc/systemd/system/ && sudo systemctl enable --now decompsite-backup.timer`.
+Restore with `pg_restore --clean --if-exists -d decompsite <file>`. Also back up
 and `DATA_DIR/uploads/`.
 
 ## Layout
