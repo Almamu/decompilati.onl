@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::{
     app::{AppError, AppResult, AppState},
     auth::{pushable_repos, RepoListError, RequireAdmin, RequireUser, SessionUser},
-    cache::membership_paths,
+    cache::{membership_paths, version_paths},
     db::{self, Project, ProjectMeta},
     images, platforms,
     util::{new_api_key, slugify, valid_slug},
@@ -288,7 +288,7 @@ pub async fn update(State(state): State<AppState>, RequireUser(u): RequireUser, 
     // version pages show which version is the default.
     state.cache.invalidate(membership_paths(&p.slug, &p.platform));
     state.cache.invalidate(membership_paths(&updated.slug, &updated.platform));
-    state.cache.invalidate(versions.iter().filter(|v| !v.is_empty()).map(|v| format!("/projects/{}/versions/{v}", updated.slug)));
+    state.cache.invalidate(versions.iter().map(|v| crate::util::version_page(&updated.slug, v)));
     Ok(edit_page(&state, &u, &updated, None, Some("Saved."), None).await)
 }
 
@@ -435,6 +435,55 @@ pub async fn import_decompdev(
         Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("decomp.dev import queued. It runs in the background; reload this page to follow it."), None).await),
         Err(e) => Ok(edit_page(&state, &u, &p, Some(&e), None, None).await),
     }
+}
+
+#[derive(Deserialize)]
+pub struct MergeVersionsForm {
+    from: String,
+    into: String,
+}
+
+/// Moves one version's history into another, or renames it when the target doesn't exist.
+pub async fn merge_versions(
+    State(state): State<AppState>,
+    RequireUser(u): RequireUser,
+    Path(id): Path<i64>,
+    Form(f): Form<MergeVersionsForm>,
+) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    let into = f.into.trim().to_string();
+    let from = f.from;
+    if into.is_empty() || !crate::report::valid_version(&into) {
+        return Ok(edit_page(&state, &u, &p, Some("Version names may only contain letters, digits, '.', '_' and '-' (up to 32)."), None, None).await);
+    }
+    if into == from {
+        return Ok(edit_page(&state, &u, &p, Some("Pick a different version to merge into."), None, None).await);
+    }
+    let (f2, i2) = (from.clone(), into.clone());
+    let (updated, existed) = state
+        .db
+        .run(move |c| {
+            let names: Vec<String> = db::versions_for_project(c, id)?.into_iter().map(|v| v.version).collect();
+            if !names.contains(&f2) {
+                return Ok((None, false));
+            }
+            let existed = names.contains(&i2);
+            db::merge_versions(c, id, &f2, &i2)?;
+            Ok((db::project_by_id(c, id)?, existed))
+        })
+        .await?;
+    let Some(updated) = updated else {
+        return Ok(edit_page(&state, &u, &p, Some("That version no longer exists."), None, None).await);
+    };
+    state.cache.invalidate(version_paths(&p.slug, &p.platform, &from));
+    state.cache.invalidate(version_paths(&p.slug, &p.platform, &into));
+    let name = |v: &str| if v.is_empty() { "(unnamed)".to_string() } else { v.to_string() };
+    let notice = if existed {
+        format!("Merged {} into {}.", name(&from), into)
+    } else {
+        format!("Renamed {} to {}.", name(&from), into)
+    };
+    Ok(edit_page(&state, &u, &updated, None, Some(&notice), None).await)
 }
 
 #[derive(Deserialize)]

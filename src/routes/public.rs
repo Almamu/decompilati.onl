@@ -148,10 +148,12 @@ pub async fn project_version(
     headers: HeaderMap,
     Path((slug, version)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    if !crate::report::valid_version(&version) || version.is_empty() {
-        return Err(AppError::NotFound);
-    }
     let key = format!("/projects/{slug}/versions/{version}");
+    let version = match version.as_str() {
+        "~" => String::new(),
+        v if crate::report::valid_version(v) && !v.is_empty() => version,
+        _ => return Err(AppError::NotFound),
+    };
     cached(&state, &headers, key, || render_project(&state, slug, Some(version))).await
 }
 
@@ -178,7 +180,7 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
         None => return Err(AppError::NotFound),
     };
     let names: Vec<String> = versions.iter().map(|v| v.version.clone()).collect();
-    let path = if active == p.default_version { format!("/projects/{}", p.slug) } else { format!("/projects/{}/versions/{active}", p.slug) };
+    let path = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, &active) };
     let title = if active != p.default_version { format!("{} ({active})", p.name) } else { p.name.clone() };
     let desc = format!(
         "{title} decompilation: {} code decompiled ({} matching).",

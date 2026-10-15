@@ -691,6 +691,37 @@ pub fn set_default_version(c: &mut Conn, project_id: i64, version: &str) -> anyh
     Ok(())
 }
 
+/// Moves version `from` into version `into` (which may not exist yet, making this a rename):
+/// the history of both is combined, skipping reports of a commit (or time) already in `into`'s,
+/// and the newer of the two current states is kept. If either was the default, `into` becomes
+/// the default.
+pub fn merge_versions(c: &mut Conn, project_id: i64, from: &str, into: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(from != into, "a version can't be merged into itself");
+    let mut tx = c.transaction()?;
+    let source = version_state(&mut tx, project_id, from)?.ok_or_else(|| anyhow::anyhow!("no version {from:?}"))?;
+    let target = version_state(&mut tx, project_id, into)?;
+    if target.as_ref().is_none_or(|t| source.last_report_at > t.last_report_at) {
+        tx.execute("DELETE FROM project_versions WHERE project_id = $1 AND version = $2", &[&project_id, &into])?;
+        tx.execute("UPDATE project_versions SET version = $3 WHERE project_id = $1 AND version = $2", &[&project_id, &from, &into])?;
+    } else {
+        tx.execute("DELETE FROM project_versions WHERE project_id = $1 AND version = $2", &[&project_id, &from])?;
+    }
+    tx.execute(
+        "UPDATE reports r SET version = $3 WHERE r.project_id = $1 AND r.version = $2
+         AND NOT EXISTS (SELECT 1 FROM reports t WHERE t.project_id = $1 AND t.version = $3
+                         AND (t.created_at = r.created_at OR (r.commit_hash IS NOT NULL AND t.commit_hash = r.commit_hash)))",
+        &[&project_id, &from, &into],
+    )?;
+    tx.execute("DELETE FROM reports WHERE project_id = $1 AND version = $2", &[&project_id, &from])?;
+    let default: String = tx.query_one("SELECT default_version FROM projects WHERE id = $1", &[&project_id])?.try_get(0)?;
+    if default == from || default == into {
+        tx.execute("UPDATE projects SET default_version = $2 WHERE id = $1", &[&project_id, &into])?;
+        mirror_version(&mut tx, project_id, into)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Result of storing a report that changed something.
 pub struct Applied {
     /// The commit of the version's previous report, to list the commits in between.

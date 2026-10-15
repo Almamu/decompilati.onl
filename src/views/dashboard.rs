@@ -238,6 +238,29 @@ pub fn edit_project(
                 }
             }
 
+            @if !versions.is_empty() {
+                div.panel {
+                    h2 { "Merge or rename versions" }
+                    p.muted { "Moves a version's history into another one, for example when a project that reported without a version starts reporting several. Reports of a commit already in the target's history are dropped, and the newer of the two current states is kept. A target that doesn't exist yet renames the version." }
+                    form.form method="post" action={ "/dashboard/p/" (p.id) "/merge-versions" } {
+                        label { "Version"
+                            select name="from" {
+                                @for v in versions {
+                                    option value=(v) { @if v.is_empty() { "(unnamed)" } @else { (v) } }
+                                }
+                            }
+                        }
+                        label { "Into"
+                            input type="text" name="into" required maxlength="32" pattern="[A-Za-z0-9._\\-]+" list="version-names" placeholder="europe";
+                            datalist #version-names {
+                                @for v in versions.iter().filter(|v| !v.is_empty()) { option value=(v) {} }
+                            }
+                        }
+                        button.btn.btn-ghost type="submit" { "Merge" }
+                    }
+                }
+            }
+
             div.panel {
                 h2 { "Cover image" }
                 p.muted { "Required. PNG, JPEG, WebP or GIF, up to 5 MB. It is resized to 640×360 (16:9)." }

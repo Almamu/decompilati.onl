@@ -222,7 +222,8 @@ fn report_format(base_url: &str) -> Markup {
         p { "Projects that decompile several releases of a game (for example " code { "us" } " and " code { "europe" } ") can report each one separately with a " code { "version" } " field, or "
             code { "?version=" } " in the URL. Each version keeps its own progress and history, and the project page gets a tab per version. "
             "The project's settings choose which version is shown on cards, listings and badges." }
-        p { "Versions are opt-in: reports without a version all go to one unnamed version, and nothing about versions is shown until a project reports two." }
+        p { "Versions are opt-in: reports without a version all go to one unnamed version, and nothing about versions is shown until a project reports two. "
+            "When a project that reported without a version starts reporting several, \"Merge or rename versions\" on its dashboard page moves the unnamed history into one of the new versions; the same form renames a version." }
 
         h2 #history { "Backfilling history" }
         p { "Add " code { "?timestamp=" } " (Unix seconds or RFC 3339) to send a report from the past. Reports older than the current progress are only added to the history graph; the current progress doesn't change. "

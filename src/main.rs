@@ -75,6 +75,7 @@ fn router(state: AppState) -> Router {
         .route("/dashboard/p/{id}/import-history", post(dashboard::import_history))
         .route("/dashboard/p/{id}/import-decompdev", post(dashboard::import_decompdev))
         .route("/dashboard/p/{id}/app-artifacts", post(dashboard::set_app_artifacts))
+        .route("/dashboard/p/{id}/merge-versions", post(dashboard::merge_versions))
         .route("/dashboard/p/{id}/delete", post(dashboard::delete))
         .route("/admin", get(dashboard::admin))
         .route("/admin/p/{id}/spotlight", post(dashboard::admin_spotlight))

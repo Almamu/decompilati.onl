@@ -223,3 +223,9 @@ mod external_repo_tests {
         assert!(n("https://evil\".com/x").is_err());
     }
 }
+
+/// The page of a non-default version. The unnamed version, which has no name to put in the
+/// URL, is `~` (never a valid version name).
+pub fn version_page(slug: &str, version: &str) -> String {
+    format!("/projects/{slug}/versions/{}", if version.is_empty() { "~" } else { version })
+}
