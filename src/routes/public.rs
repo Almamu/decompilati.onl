@@ -77,9 +77,21 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
 
         let html = views::layout::render(Page {
             title: "",
-            description: "Progress tracker for video game decompilation projects.",
+            description: &format!(
+                "Track the progress of {} video game decompilation projects: matching and non-matching code, data, areas and recent changes, reported by each project's CI.",
+                visible.len()
+            ),
             image: None,
             body: views::home::home(&spotlight, &movers, &visible, visible.len()),
+            canonical: Some("/".into()),
+            json_ld: Some(serde_json::json!({
+                "@context": "https://schema.org",
+                "@type": "WebSite",
+                "name": views::layout::SITE_NAME,
+                "url": format!("{}/", state.config.base_url),
+                "description": "Progress tracker for video game decompilation projects.",
+            })),
+            og_type: None,
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -104,6 +116,8 @@ async fn listing_page(state: &AppState, headers: &HeaderMap, key: String, platfo
             description: &desc,
             image: None,
             body: views::home::listing(&title, intro, &visible, &hidden, &listed, platform.map(|p| p.slug)),
+            canonical: Some(platform.map_or("/projects".to_string(), |p| format!("/platform/{}", p.slug))),
+            ..Default::default()
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -132,6 +146,8 @@ pub async fn platforms_index(State(state): State<AppState>, headers: HeaderMap) 
             description: "Decompilation projects by platform.",
             image: None,
             body: views::home::platforms_page(&counts),
+            canonical: Some("/platforms".into()),
+            ..Default::default()
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -186,6 +202,7 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
         None => return Err(AppError::NotFound),
     };
     let names: Vec<String> = versions.iter().map(|v| v.version.clone()).collect();
+    let path = if active == p.default_version { format!("/projects/{}", p.slug) } else { format!("/projects/{}/versions/{active}", p.slug) };
     let title = if active != p.default_version { format!("{} ({active})", p.name) } else { p.name.clone() };
     let desc = format!(
         "{title} decompilation: {} code decompiled ({} matching).",
@@ -198,6 +215,9 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
         description: &desc,
         image: og_image(state, &p),
         body: views::project::project(&shown, &reports, &state.config.base_url, hidden, &names, &active),
+        canonical: Some(path.clone()),
+        og_type: Some("article"),
+        json_ld: Some(project_json_ld(state, &shown, &path, &desc)),
     });
     Ok(CachedPage::new(html, HTML))
 }
@@ -263,6 +283,8 @@ pub async fn docs(State(state): State<AppState>, headers: HeaderMap) -> AppResul
             description: "How to report decompilation progress from CI.",
             image: None,
             body: views::docs::docs(&state.config.base_url, state.config.github_app.as_ref().map(|a| a.slug.as_str())),
+            canonical: Some("/docs".into()),
+            ..Default::default()
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -309,7 +331,10 @@ pub async fn feed(State(state): State<AppState>, headers: HeaderMap) -> AppResul
 pub async fn robots() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain"), (header::CACHE_CONTROL, "public, max-age=86400")],
-        "User-agent: *\nDisallow: /dashboard\nDisallow: /admin\nDisallow: /auth\nDisallow: /api\n",
+        format!(
+            "User-agent: *\nDisallow: /dashboard\nDisallow: /admin\nDisallow: /auth\nDisallow: /api\n\nSitemap: {}/sitemap.xml\n",
+            views::layout::base_url()
+        ),
     )
 }
 
@@ -347,4 +372,75 @@ pub async fn old_project_url(Path(rest): Path<String>) -> Response {
         [(header::LOCATION, target), (header::CACHE_CONTROL, "public, max-age=86400".to_string())],
     )
         .into_response()
+}
+
+/// schema.org description of a project page: source code about a video game.
+fn project_json_ld(state: &AppState, p: &Project, path: &str, desc: &str) -> serde_json::Value {
+    let platform = platforms::get_or_other(&p.platform);
+    let mut ld = serde_json::json!({
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": format!("{} decompilation", p.name),
+        "description": desc,
+        "url": format!("{}{path}", state.config.base_url),
+        "codeRepository": format!("https://github.com/{}", p.repo),
+        "author": { "@type": "Person", "name": p.owner_login, "url": format!("https://github.com/{}", p.owner_login) },
+        "about": { "@type": "VideoGame", "name": p.name, "gamePlatform": platform.name },
+        "dateCreated": crate::util::iso_time(p.created_at),
+    });
+    if let Some(t) = p.last_report_at {
+        ld["dateModified"] = crate::util::iso_time(t).into();
+    }
+    if let Some(img) = og_image(state, p) {
+        ld["image"] = img.into();
+    }
+    ld
+}
+
+/// `GET /sitemap.xml`: every public page, with the last time its content changed.
+pub async fn sitemap(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    cached(&state, &headers, "/sitemap.xml".into(), || async {
+        let all = state.db.run(db::public_projects_owned).await?;
+        let threshold = state.config.hide_threshold;
+        let listed: Vec<&Project> = all.iter().filter(|p| is_visible(p, threshold)).collect();
+        let ids: Vec<i64> = listed.iter().map(|p| p.id).collect();
+        let versions = state
+            .db
+            .run(move |c| {
+                ids.into_iter().map(|id| Ok((id, db::versions_for_project(c, id)?))).collect::<anyhow::Result<HashMap<_, _>>>()
+            })
+            .await?;
+        let base = &state.config.base_url;
+        let latest = listed.iter().filter_map(|p| p.last_report_at).max();
+        let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"#);
+        let mut url = |path: &str, modified: Option<i64>| {
+            xml.push_str(&format!("<url><loc>{base}{}</loc>", xml_escape(path)));
+            if let Some(t) = modified {
+                xml.push_str(&format!("<lastmod>{}</lastmod>", crate::util::iso_time(t)));
+            }
+            xml.push_str("</url>");
+        };
+        url("/", latest);
+        url("/projects", latest);
+        url("/platforms", latest);
+        url("/docs", None);
+        let mut platforms: Vec<&str> = listed.iter().map(|p| p.platform.as_str()).collect();
+        platforms.sort_unstable();
+        platforms.dedup();
+        for pl in platforms {
+            let modified = listed.iter().filter(|p| p.platform == pl).filter_map(|p| p.last_report_at).max();
+            url(&format!("/platform/{pl}"), modified);
+        }
+        for p in &listed {
+            url(&format!("/projects/{}", p.slug), Some(p.last_report_at.unwrap_or(p.updated_at)));
+            for v in versions.get(&p.id).into_iter().flatten() {
+                if v.version != p.default_version && !v.version.is_empty() {
+                    url(&format!("/projects/{}/versions/{}", p.slug, v.version), v.last_report_at);
+                }
+            }
+        }
+        xml.push_str("</urlset>");
+        Ok(CachedPage::new(xml, "application/xml; charset=utf-8"))
+    })
+    .await
 }

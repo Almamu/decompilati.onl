@@ -46,6 +46,7 @@ fn router(state: AppState) -> Router {
         .route("/docs", get(public::docs))
         .route("/feed.xml", get(public::feed))
         .route("/robots.txt", get(public::robots))
+        .route("/sitemap.xml", get(public::sitemap))
         .route("/uploads/{file}", get(public::upload))
         .route("/static/{version}/{name}", get(assets::serve));
 
@@ -117,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("seed-demo") {
         return seed::run(&db, &config.uploads_dir());
     }
+    views::layout::set_base_url(&config.base_url);
     let bind = config.bind;
     let state = AppState::new(config, db)?;
 

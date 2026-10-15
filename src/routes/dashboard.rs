@@ -26,7 +26,8 @@ const MAX_PROJECTS_PER_USER: usize = 25;
 const RESERVED_SLUGS: &[&str] = &["new", "admin", "api", "static"];
 
 fn page(title: &str, body: Markup) -> Response {
-    Html(views::layout::render(Page { title, description: "", image: None, body })).into_response()
+    // Private pages: no canonical URL, so they render with `noindex`.
+    Html(views::layout::render(Page { title, body, ..Default::default() })).into_response()
 }
 
 async fn repo_options(state: &AppState, u: &SessionUser, next: &str) -> RepoOptions {

@@ -1,16 +1,36 @@
+use std::sync::OnceLock;
+
 use axum::http::StatusCode;
-use maud::{html, Markup, DOCTYPE};
+use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::assets;
 
 pub const SITE_NAME: &str = "decompilati.onl";
 
+static BASE_URL: OnceLock<String> = OnceLock::new();
+
+/// Set once at startup; used for canonical URLs and other absolute links in page heads.
+pub fn set_base_url(url: &str) {
+    let _ = BASE_URL.set(url.to_string());
+}
+
+pub fn base_url() -> &'static str {
+    BASE_URL.get().map(String::as_str).unwrap_or("")
+}
+
+#[derive(Default)]
 pub struct Page<'a> {
     pub title: &'a str,
     pub description: &'a str,
     /// Absolute URL of a preview image for social cards.
     pub image: Option<String>,
     pub body: Markup,
+    /// Path of the canonical URL (e.g. `/projects/sm64`); `None` for pages that shouldn't be indexed.
+    pub canonical: Option<String>,
+    /// schema.org JSON-LD describing the page.
+    pub json_ld: Option<serde_json::Value>,
+    /// Open Graph type: `website` by default.
+    pub og_type: Option<&'static str>,
 }
 
 /// Renders a full HTML document.
@@ -18,7 +38,10 @@ pub struct Page<'a> {
 /// Public pages are cached at the edge and shared by every visitor, so the shell never contains
 /// per-user content: the login/user area is filled in by `app.js` from `/api/me`.
 pub fn render(p: Page) -> String {
-    let full_title = if p.title.is_empty() { SITE_NAME.to_string() } else { format!("{} · {SITE_NAME}", p.title) };
+    let full_title = if p.title.is_empty() { format!("{SITE_NAME} · game decompilation progress") } else { format!("{} · {SITE_NAME}", p.title) };
+    let canonical = p.canonical.as_ref().map(|path| format!("{}{path}", base_url()));
+    // JSON-LD is embedded in a script tag; escaping "<" keeps it from closing the tag early.
+    let json_ld = p.json_ld.as_ref().map(|v| v.to_string().replace('<', "\\u003c"));
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -27,11 +50,30 @@ pub fn render(p: Page) -> String {
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (full_title) }
                 meta name="description" content=(p.description);
+                @if let Some(url) = &canonical {
+                    link rel="canonical" href=(url);
+                    meta property="og:url" content=(url);
+                } @else {
+                    meta name="robots" content="noindex";
+                }
+                meta property="og:site_name" content=(SITE_NAME);
+                meta property="og:type" content=(p.og_type.unwrap_or("website"));
                 meta property="og:title" content=(full_title);
                 meta property="og:description" content=(p.description);
+                meta name="twitter:title" content=(full_title);
+                meta name="twitter:description" content=(p.description);
                 @if let Some(img) = &p.image {
                     meta property="og:image" content=(img);
+                    meta property="og:image:width" content="640";
+                    meta property="og:image:height" content="360";
+                    meta name="twitter:image" content=(img);
                     meta name="twitter:card" content="summary_large_image";
+                } @else {
+                    meta name="twitter:card" content="summary";
+                }
+                meta name="theme-color" content="#0d1016";
+                @if let Some(ld) = &json_ld {
+                    script type="application/ld+json" { (PreEscaped(ld)) }
                 }
                 meta name="color-scheme" content="dark light";
                 link rel="icon" href=(assets::url("favicon.svg")) type="image/svg+xml";
@@ -70,7 +112,6 @@ pub fn error_page(status: StatusCode, msg: &str) -> String {
     render(Page {
         title: status.canonical_reason().unwrap_or("Error"),
         description: msg,
-        image: None,
         body: html! {
             section.narrow.error {
                 h1 { (status.as_u16()) " " (status.canonical_reason().unwrap_or("")) }
@@ -78,6 +119,7 @@ pub fn error_page(status: StatusCode, msg: &str) -> String {
                 p { a.btn href="/" { "Back to the homepage" } }
             }
         },
+        ..Default::default()
     })
 }
 
