@@ -141,3 +141,33 @@ mod tests {
         assert_eq!(parse_url("https://decomp.dev/../etc"), None);
     }
 }
+
+/// Whether decomp.dev has progress for a repository (`owner/name`). Quick: new projects
+/// check this while being created.
+pub async fn has_project(state: &AppState, repo: &str) -> anyhow::Result<bool> {
+    let (owner, name) = repo.split_once('/').ok_or_else(|| anyhow::anyhow!("invalid repository"))?;
+    anyhow::ensure!(valid_name(owner) && valid_name(name), "invalid repository");
+    let res = state
+        .http
+        .get(format!("https://decomp.dev/{owner}/{name}.json"))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await?;
+    if res.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(false);
+    }
+    let summary: Summary = res.error_for_status()?.json().await?;
+    Ok(summary.report_versions.iter().any(|v| valid_version(v)))
+}
+
+/// After a project is created: if decomp.dev has it, queue an import of its history.
+/// Returns whether an import was queued.
+pub async fn import_if_listed(state: &AppState, project: &db::Project, user_id: i64) -> anyhow::Result<bool> {
+    if !has_project(state, &project.repo).await? {
+        return Ok(false);
+    }
+    imports::queue(state, project, user_id, "decompdev", Some(format!("https://decomp.dev/{}", project.repo)))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    Ok(true)
+}

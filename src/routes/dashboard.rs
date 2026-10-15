@@ -199,7 +199,16 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
         .await?
         .ok_or(AppError::NotFound)?;
     state.cache.invalidate(membership_paths(&project.slug, &project.platform));
-    Ok(edit_page(&state, &u, &project, None, Some("Project created! Now set up your CI to report progress."), Some(&key)).await)
+    // Projects that were on decomp.dev bring their history along automatically.
+    let notice = match crate::decompdev::import_if_listed(&state, &project, uid).await {
+        Ok(true) => "Project created! It was on decomp.dev, so its progress history is being imported in the background. Now set up your CI to keep reporting.",
+        Ok(false) => "Project created! Now set up your CI to report progress.",
+        Err(e) => {
+            tracing::info!(repo = %project.repo, error = %e, "couldn't check decomp.dev for a new project");
+            "Project created! Now set up your CI to report progress. (decomp.dev couldn't be checked for existing history; you can import it below.)"
+        }
+    };
+    Ok(edit_page(&state, &u, &project, None, Some(notice), Some(&key)).await)
 }
 
 async fn edit_form_page(state: &AppState, u: &SessionUser, p: &Project, f: &ProjectForm, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {

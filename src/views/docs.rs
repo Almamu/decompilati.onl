@@ -293,6 +293,7 @@ fn decomp_dev(base_url: &str, app_slug: Option<&str>) -> Markup {
 
         h2 { "1. Register the project" }
         p { a href="/dashboard/new" { "Add the project" } " while logged in with a GitHub account that can push to the repository. A cover image is required." }
+        p { "If the repository is on decomp.dev, its whole history (every version, with the latest report's areas) is imported automatically right after the project is created. There's nothing else to do for step 4." }
 
         h2 { "2. Connect CI (pick one)" }
         h3 { "With the GitHub App: no workflow changes" }
@@ -310,7 +311,7 @@ fn decomp_dev(base_url: &str, app_slug: Option<&str>) -> Markup {
             "The project's settings choose which version is shown on cards, listings and badges." }
 
         h2 #history { "4. Import your history" }
-        p { strong { "From decomp.dev: " } "on the project's dashboard page, \"Import from decomp.dev\" takes the project's decomp.dev URL (for example " code { "https://decomp.dev/owner/repo" } ") and imports its whole history: every version and every report, with the latest report's areas. It doesn't need the GitHub App, and it can be run again safely." }
+        p { strong { "From decomp.dev: " } "this happens automatically when the project is added. To run it again (it's safe: reports already in the history are skipped), \"Import from decomp.dev\" on the project's dashboard page takes the project's decomp.dev URL (for example " code { "https://decomp.dev/owner/repo" } ") and imports its whole history: every version and every report, with the latest report's areas. It doesn't need the GitHub App, and it can be run again safely." }
         p { strong { "From GitHub Actions: " } "on the project's dashboard page, \"Import history from GitHub Actions\" (needs the GitHub App) imports the report artifacts of past successful runs, each at the time of its run. "
             "GitHub deletes artifacts after their retention period (90 days by default), so this usually covers the last few months." }
         p { strong { "Anything else: " } "rebuild the report for past commits and send it with a " code { "timestamp" } ". For example, every 20th commit (adjust the build commands to your project):" }
