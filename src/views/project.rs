@@ -8,7 +8,7 @@ use crate::{
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{code_bar, cover, data_bar, icon_discord, icon_github, icon_rss, last_change, legend_code, platform_chip, vote},
+        components::{code_bar, cover, data_bar, icon_discord, icon_github, icon_repo, icon_rss, last_change, legend_code, platform_chip, vote},
         layout::time_ago,
         svg,
     },
@@ -34,8 +34,14 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     "by " a href={ "https://github.com/" (p.owner_login) } rel="noopener" { "@" (p.owner_login) }
                 }
                 div.link-buttons {
-                    a.btn.btn-github href={ "https://github.com/" (p.repo) } rel="noopener" title={ "github.com/" (p.repo) } {
-                        (icon_github()) span { "GitHub" }
+                    @if p.is_github() {
+                        a.btn.btn-github href=(p.repo_link()) rel="noopener" title={ "github.com/" (p.repo) } {
+                            (icon_github()) span { "GitHub" }
+                        }
+                    } @else {
+                        a.btn.btn-repo href=(p.repo_link()) rel="noopener nofollow" title=(p.repo) {
+                            (icon_repo()) span { (p.host_label()) }
+                        }
                     }
                     @if let Some(invite) = &p.discord {
                         a.btn.btn-discord href=(invite) rel="noopener nofollow" { (icon_discord()) span { "Discord" } }
@@ -162,7 +168,9 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                                 td.commit {
                                     @if let Some(c) = &r.commit {
                                         @if is_commit_hash(c) {
-                                            a href={ "https://github.com/" (p.repo) "/commit/" (c) } rel="noopener" { code { (&c[..7.min(c.len())]) } }
+                                            @if let Some(link) = p.commit_link(c) {
+                                                a href=(link) rel="noopener" { code { (&c[..7.min(c.len())]) } }
+                                            } @else { code { (&c[..7.min(c.len())]) } }
                                         } @else { code { (c) } }
                                     }
                                     @if let Some(m) = &r.message { " " span.muted { (m) } }

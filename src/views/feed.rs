@@ -40,11 +40,16 @@ fn item(base: &str, it: &FeedItem) -> String {
     if let Some(m) = &it.message {
         let _ = write!(html, "<p>{}</p>", esc(m));
     }
-    if let Some(c) = it.commit.as_deref().filter(|c| is_commit_hash(c)) {
+    let commit_url = it
+        .commit
+        .as_deref()
+        .filter(|c| is_commit_hash(c))
+        .and_then(|c| crate::db::commit_link(&it.repo_host, &it.repo, it.repo_url.as_deref(), c).map(|link| (c, link)));
+    if let Some((c, link)) = commit_url {
         let _ = write!(
             html,
-            r#"<p><a href="https://github.com/{}/commit/{c}">Commit {}</a></p>"#,
-            esc(&it.repo),
+            r#"<p><a href="{}">Commit {}</a></p>"#,
+            esc(&link),
             &c[..7.min(c.len())]
         );
     }

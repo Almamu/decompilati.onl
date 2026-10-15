@@ -91,30 +91,40 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
     if platforms::get(&f.platform).is_none() {
         return Err("Pick a platform.".into());
     }
-    let selected = f.repo.trim();
-    // The repository id is only known (and only changes) when one is picked from the list.
-    let (repo, github_repo_id) = match existing {
-        Some(p) if selected.is_empty() || p.repo.eq_ignore_ascii_case(selected) => (p.repo.clone(), None),
-        _ => {
-            if selected.is_empty() {
-                return Err("Pick a repository.".into());
+    // Outside GitHub there's no push-access check and no GitHub integration: progress comes
+    // through the API only.
+    let external = f.repo_host == "external";
+    let (repo, github_repo_id, repo_url) = if external {
+        let (display, url) = crate::util::normalize_external_repo(&f.repo_url)?;
+        (display, None, Some(url))
+    } else {
+        let selected = f.repo.trim();
+        // The repository id is only known (and only changes) when one is picked from the list.
+        match existing {
+            Some(p) if p.is_github() && (selected.is_empty() || p.repo.eq_ignore_ascii_case(selected)) => (p.repo.clone(), None, None),
+            _ => {
+                if selected.is_empty() {
+                    return Err("Pick a repository.".into());
+                }
+                let repos = match pushable_repos(state, u).await {
+                    Ok(r) => r,
+                    Err(RepoListError::Expired) => return Err("Your GitHub session has expired. Please log in again.".into()),
+                    Err(RepoListError::Failed) => return Err("Couldn't reach GitHub, please try again.".into()),
+                };
+                let (name, id) = repos
+                    .into_iter()
+                    .find(|r| r.full_name.eq_ignore_ascii_case(selected))
+                    .map(|r| (r.full_name, Some(r.id)))
+                    .ok_or("Pick one of your public repositories from the list.")?;
+                // decomp.dev-style /{owner}/{repo} links redirect to projects, so owners can't
+                // shadow site pages.
+                if name.split('/').next().is_some_and(crate::util::is_reserved_name) {
+                    return Err("Repositories owned by an account with a name reserved for this site's pages can't be registered.".into());
+                }
+                (name, id, None)
             }
-            let repos = match pushable_repos(state, u).await {
-                Ok(r) => r,
-                Err(RepoListError::Expired) => return Err("Your GitHub session has expired. Please log in again.".into()),
-                Err(RepoListError::Failed) => return Err("Couldn't reach GitHub, please try again.".into()),
-            };
-            repos
-                .into_iter()
-                .find(|r| r.full_name.eq_ignore_ascii_case(selected))
-                .map(|r| (r.full_name, Some(r.id)))
-                .ok_or("Pick one of your public repositories from the list.")?
         }
     };
-    // decomp.dev-style /{owner}/{repo} links redirect to projects, so owners can't shadow site pages.
-    if repo.split('/').next().is_some_and(crate::util::is_reserved_name) {
-        return Err("Repositories owned by an account with a name reserved for this site's pages can't be registered.".into());
-    }
     let ai_contributions = f.ai_contributions.trim().to_string();
     if !crate::db::AI_CONTRIBUTIONS.iter().any(|(v, _)| *v == ai_contributions) {
         return Err("Pick an option for AI contributions.".into());
@@ -139,6 +149,8 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         platform: f.platform.clone(),
         repo,
         github_repo_id,
+        repo_host: if external { "external".into() } else { "github".into() },
+        repo_url,
         ai_contributions,
         discord,
         description,
@@ -162,6 +174,8 @@ async fn read_new_project_form(mut mp: Multipart) -> AppResult<(ProjectForm, Opt
             "name" => f.name = value,
             "platform" => f.platform = value,
             "repo" => f.repo = value,
+            "repo_host" => f.repo_host = value,
+            "repo_url" => f.repo_url = value,
             "ai_contributions" => f.ai_contributions = value,
             "discord" => f.discord = value,
             "description" => f.description = value,
@@ -204,7 +218,8 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
     state.cache.invalidate(membership_paths(&project.slug, &project.platform));
     // Projects that were on decomp.dev bring their history along, through a background job
     // so creating the project doesn't depend on decomp.dev being up.
-    let notice = match crate::decompdev::queue_auto_import(&state, &project, uid).await {
+    let auto_import = if project.is_github() { crate::decompdev::queue_auto_import(&state, &project, uid).await } else { Err(String::new()) };
+    let notice = match auto_import {
         Ok(()) => "Project created! If it was on decomp.dev, its progress history is imported in the background (see \"Import history\" below). Now set up your CI to keep reporting.",
         Err(_) => "Project created! Now set up your CI to report progress.",
     };

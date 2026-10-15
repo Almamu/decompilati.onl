@@ -109,6 +109,10 @@ async fn fetch(state: &AppState, repo: &str, prev: Option<&str>, head: Option<&s
 /// Background task run after a report is stored: fetch and save the commits, then refresh
 /// the cached pages.
 pub fn spawn_commit_fetch(state: AppState, project: db::Project, version: String, prev_commit: Option<String>, report_commit: Option<String>) {
+    // Commit lists come from the GitHub API.
+    if !project.is_github() {
+        return;
+    }
     let prev = prev_commit.filter(|c| is_commit_hash(c));
     let head = report_commit.clone().filter(|c| is_commit_hash(c));
     tokio::spawn(async move {

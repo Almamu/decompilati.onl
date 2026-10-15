@@ -163,7 +163,8 @@ fn overview() -> Markup {
 fn getting_started(base_url: &str) -> Markup {
     html! {
         h2 { "1. Register your project" }
-        p { "Log in with GitHub and " a href="/dashboard/new" { "add your project" } ". You pick the repository from the public repositories you can push to, and a cover image is required." }
+        p { "Log in with GitHub and " a href="/dashboard/new" { "add your project" } ". For code on GitHub, pick the repository from the public repositories you can push to; code hosted elsewhere (GitLab, Codeberg, self-hosted…) is added by its URL. A cover image is required." }
+        p.muted { "Projects outside GitHub report progress through the API only: the GitHub App, history imports from GitHub Actions or decomp.dev, and commit lists need a GitHub repository." }
 
         h2 { "2. Keep the API key" }
         p { "The API key is shown once, right after creating the project. Store it as a secret in your CI, for example " code { "DECOMP_API_KEY" } ". You can generate a new one at any time from the project's dashboard page; the old one stops working immediately." }

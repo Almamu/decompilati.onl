@@ -17,6 +17,11 @@ pub struct ProjectForm {
     pub platform: String,
     #[serde(default)]
     pub repo: String,
+    /// `github` (pick from the list) or `external` (any https URL).
+    #[serde(default)]
+    pub repo_host: String,
+    #[serde(default)]
+    pub repo_url: String,
     #[serde(default)]
     pub ai_contributions: String,
     #[serde(default)]
@@ -35,7 +40,9 @@ impl ProjectForm {
         ProjectForm {
             name: p.name.clone(),
             platform: p.platform.clone(),
-            repo: p.repo.clone(),
+            repo: if p.is_github() { p.repo.clone() } else { String::new() },
+            repo_host: p.repo_host.clone(),
+            repo_url: p.repo_url.clone().unwrap_or_default(),
             ai_contributions: p.ai_contributions.clone(),
             discord: p.discord.clone().unwrap_or_default(),
             description: p.description.clone(),
@@ -90,11 +97,18 @@ pub enum RepoOptions {
 }
 
 fn repo_field(f: &ProjectForm, repos: &RepoOptions) -> Markup {
+    let external = f.repo_host == "external";
     html! {
-        label { "GitHub repository " span.muted { "(public repositories you can push to)" }
+        // Which of the two fields applies is shown with CSS (`:has`); without it both show.
+        fieldset.repo-choice {
+            legend { "Where is the code?" }
+            label.check { input type="radio" name="repo_host" value="github" checked[!external]; span { "GitHub" } }
+            label.check { input type="radio" name="repo_host" value="external" checked[external]; span { "Elsewhere (GitLab, Codeberg, self-hosted…)" } }
+        }
+        label.repo-github { "GitHub repository " span.muted { "(public repositories you can push to)" }
             @match repos {
                 RepoOptions::List(list) => {
-                    select name="repo" required {
+                    select name="repo" {
                         option value="" disabled selected[f.repo.is_empty()] { "Select a repository…" }
                         // Keep the current repository selectable even if it's no longer in the list.
                         @if !f.repo.is_empty() && !list.iter().any(|r| r.eq_ignore_ascii_case(&f.repo)) {
@@ -115,6 +129,10 @@ fn repo_field(f: &ProjectForm, repos: &RepoOptions) -> Markup {
                     span.notice.err { "Couldn't load your repositories from GitHub. Please reload the page to try again." }
                 }
             }
+        }
+        label.repo-external { "Repository URL " span.muted { "(public, https)" }
+            input type="url" name="repo_url" value=(f.repo_url) maxlength="300" placeholder="https://gitlab.com/owner/game";
+            span.muted.hint { "Outside GitHub, progress is reported through the API only: the GitHub App, history imports and commit lists need a GitHub repository." }
         }
     }
 }
@@ -165,7 +183,7 @@ pub fn new_project(f: &ProjectForm, repos: &RepoOptions, error: Option<&str>) ->
                     input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" required;
                 }
                 p.muted { "The project's URL is generated from its name and stays the same if you rename it later." }
-                button.btn type="submit" disabled[!matches!(repos, RepoOptions::List(_))] { "Create project" }
+                button.btn type="submit" { "Create project" }
             }
         }
     }
@@ -241,7 +259,7 @@ pub fn edit_project(
                 }
             }
 
-            @if let Some(slug) = app_slug {
+            @if let Some(slug) = app_slug.filter(|_| p.is_github()) {
                 div.panel {
                     h2 { "Automatic import (decomp.dev compatible)" }
                     p { "If your CI uploads objdiff's " code { "report.json" } " as an artifact named " code { "<version>_report" } " (as decomp.dev required), install the GitHub App on "
@@ -250,6 +268,7 @@ pub fn edit_project(
                 }
             }
 
+            @if p.is_github() {
             div.panel {
                 h2 { "Import history" }
                 p.muted { "Fill the history graph with progress from before the project was registered here. Imports run in the background, and reports already in the history are skipped, so running one again is safe." }
@@ -272,6 +291,7 @@ pub fn edit_project(
                     }
                     p.muted.small { "For anything older, " a href="/docs/report-format#history" { "backfill through the API" } "." }
                 }
+            }
             }
 
             @if u.is_admin {

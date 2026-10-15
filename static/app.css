@@ -345,3 +345,8 @@ section > .search { margin: 0 0 12px; }
   #auth-menu { display: flex; flex-direction: column; }
   .menu-logout { width: 100%; text-align: left; background: none; border: 0; font: inherit; cursor: pointer; }
 }
+.repo-choice { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.repo-choice legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
+.form:has(.repo-choice input[value="github"]:checked) .repo-external { display: none; }
+.form:has(.repo-choice input[value="external"]:checked) .repo-github { display: none; }
+.btn-repo { background: #57606a; color: #fff; }

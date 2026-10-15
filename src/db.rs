@@ -174,6 +174,11 @@ ALTER TABLE projects ADD COLUMN discord TEXT;
 "#, r#"
 ALTER TABLE projects ADD COLUMN github_repo_id BIGINT;
 CREATE INDEX projects_github_repo_id ON projects(github_repo_id);
+"#, r#"
+-- 'github' or 'external'. External projects keep their URL in repo_url and a display
+-- form (host/path) in repo.
+ALTER TABLE projects ADD COLUMN repo_host TEXT NOT NULL DEFAULT 'github';
+ALTER TABLE projects ADD COLUMN repo_url TEXT;
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -237,9 +242,37 @@ pub struct Project {
     pub discord: Option<String>,
     /// GitHub's numeric id of the repository: stable across renames and transfers.
     pub github_repo_id: Option<i64>,
+    /// `github`, or `external` for repositories hosted elsewhere (no GitHub integrations).
+    pub repo_host: String,
+    /// For external repositories: their URL (`repo` holds a host/path display form).
+    pub repo_url: Option<String>,
 }
 
 impl Project {
+    pub fn is_github(&self) -> bool {
+        self.repo_host == "github"
+    }
+    /// Web address of the repository.
+    pub fn repo_link(&self) -> String {
+        repo_link(&self.repo_host, &self.repo, self.repo_url.as_deref())
+    }
+    /// Web address of a commit, when the host's URL scheme is known.
+    pub fn commit_link(&self, sha: &str) -> Option<String> {
+        commit_link(&self.repo_host, &self.repo, self.repo_url.as_deref(), sha)
+    }
+    /// Short name of where the code lives, for the repository button.
+    pub fn host_label(&self) -> &'static str {
+        if self.is_github() {
+            return "GitHub";
+        }
+        match self.repo.split('/').next().unwrap_or("") {
+            "gitlab.com" => "GitLab",
+            "codeberg.org" => "Codeberg",
+            "bitbucket.org" => "Bitbucket",
+            "sr.ht" | "git.sr.ht" => "SourceHut",
+            _ => "Repository",
+        }
+    }
     pub fn score(&self) -> i64 {
         self.upvotes - self.downvotes
     }
@@ -270,6 +303,8 @@ pub struct ProjectMeta {
     pub discord: Option<String>,
     pub description: String,
     pub ai_generated: bool,
+    pub repo_host: String,
+    pub repo_url: Option<String>,
 }
 
 const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platform, p.repo, p.ai_contributions, p.description,
@@ -277,7 +312,8 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
-    p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord, p.github_repo_id";
+    p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord, p.github_repo_id,
+    p.repo_host, p.repo_url";
 
 fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
     Ok(Project {
@@ -314,6 +350,8 @@ fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
         functions: FunctionStats { total: unsigned(r, 36)?, matching: unsigned(r, 37)? },
         discord: r.try_get(38)?,
         github_repo_id: r.try_get(39)?,
+        repo_host: r.try_get(40)?,
+        repo_url: r.try_get(41)?,
     })
 }
 
@@ -495,10 +533,10 @@ pub fn image_in_use(c: &mut Conn, image: &str) -> anyhow::Result<bool> {
 pub fn insert_project(c: &mut Conn, owner_id: i64, m: &ProjectMeta, image: &str, key_hash: &str, key_prefix: &str) -> anyhow::Result<i64> {
     let t = now();
     let row = c.query_one(
-        "INSERT INTO projects (slug, owner_id, name, platform, repo, github_repo_id, ai_contributions, discord, description, ai_generated, image,
+        "INSERT INTO projects (slug, owner_id, name, platform, repo, github_repo_id, repo_host, repo_url, ai_contributions, discord, description, ai_generated, image,
                                api_key_hash, api_key_prefix, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $14, $6, $13, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
-        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord, &m.github_repo_id],
+         VALUES ($1, $2, $3, $4, $5, $14, $15, $16, $6, $13, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
+        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord, &m.github_repo_id, &m.repo_host, &m.repo_url],
     )?;
     Ok(row.try_get(0)?)
 }
@@ -506,9 +544,10 @@ pub fn insert_project(c: &mut Conn, owner_id: i64, m: &ProjectMeta, image: &str,
 pub fn update_project_meta(c: &mut Conn, id: i64, m: &ProjectMeta) -> anyhow::Result<()> {
     c.execute(
         "UPDATE projects SET slug = $2, name = $3, platform = $4, repo = $5, ai_contributions = $6, description = $7, discord = $10,
-                             github_repo_id = COALESCE($11, github_repo_id),
+                             github_repo_id = CASE WHEN $12 = 'github' THEN COALESCE($11, github_repo_id) END,
+                             repo_host = $12, repo_url = $13,
                              ai_generated = $8, updated_at = $9 WHERE id = $1",
-        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord, &m.github_repo_id],
+        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord, &m.github_repo_id, &m.repo_host, &m.repo_url],
     )?;
     Ok(())
 }
@@ -977,11 +1016,13 @@ pub struct FeedItem {
     pub name: String,
     pub repo: String,
     pub prev_code: Option<CodeStats>,
+    pub repo_host: String,
+    pub repo_url: Option<String>,
 }
 
 const FEED_SQL: &str = "SELECT r.id, r.created_at, r.version, r.code_total, r.code_matching, r.code_nonmatching,
         r.data_total, r.data_done, r.commit_hash, r.message, p.slug, p.name, p.repo,
-        prev.code_total, prev.code_matching, prev.code_nonmatching
+        prev.code_total, prev.code_matching, prev.code_nonmatching, p.repo_host, p.repo_url
     FROM reports r
     JOIN projects p ON p.id = r.project_id
     JOIN users u ON u.id = p.owner_id
@@ -1004,6 +1045,8 @@ fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
         slug: r.try_get(10)?,
         name: r.try_get(11)?,
         repo: r.try_get(12)?,
+        repo_host: r.try_get(16)?,
+        repo_url: r.try_get(17)?,
         prev_code: match prev_total {
             Some(total) => Some(CodeStats {
                 total: total.max(0) as u64,
@@ -1056,7 +1099,10 @@ pub struct RepoIdentity {
 /// Every project's repository name and id, for refreshing names.
 pub fn repo_identities(c: &mut Conn) -> anyhow::Result<Vec<RepoIdentity>> {
     Ok(c
-        .query("SELECT id, repo, github_repo_id, slug, platform FROM projects ORDER BY id", &[])?
+        .query(
+            "SELECT id, repo, github_repo_id, slug, platform FROM projects WHERE repo_host = 'github' ORDER BY id",
+            &[],
+        )?
         .iter()
         .map(|r| {
             Ok(RepoIdentity {
@@ -1087,4 +1133,25 @@ pub fn rename_repo(c: &mut Conn, repo_id: i64, full_name: &str) -> anyhow::Resul
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, postgres::Error>>()?)
+}
+
+pub fn repo_link(host: &str, repo: &str, url: Option<&str>) -> String {
+    match url {
+        Some(u) if host != "github" => u.to_string(),
+        _ => format!("https://github.com/{repo}"),
+    }
+}
+
+/// Commit links for hosts whose URL scheme is known; `None` elsewhere.
+pub fn commit_link(host: &str, repo: &str, url: Option<&str>, sha: &str) -> Option<String> {
+    if host == "github" {
+        return Some(format!("https://github.com/{repo}/commit/{sha}"));
+    }
+    let url = url?;
+    match repo.split('/').next().unwrap_or("") {
+        "gitlab.com" => Some(format!("{url}/-/commit/{sha}")),
+        "codeberg.org" => Some(format!("{url}/commit/{sha}")),
+        "bitbucket.org" => Some(format!("{url}/commits/{sha}")),
+        _ => None,
+    }
 }

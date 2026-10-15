@@ -181,3 +181,45 @@ mod discord_tests {
         assert!(n("javascript:alert(1)").is_err());
     }
 }
+
+/// Checks a repository URL outside GitHub and returns `(display, url)`: the display form is
+/// `host/path` (e.g. `gitlab.com/owner/game`). GitHub URLs are refused: those are picked
+/// from the user's own repositories, where push access is verified.
+pub fn normalize_external_repo(input: &str) -> Result<(String, String), &'static str> {
+    let s = input.trim().trim_end_matches('/');
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    let rest = s.strip_prefix("https://").ok_or("The repository URL must start with https://")?;
+    if s.len() > 300 || rest.chars().any(|c| c.is_whitespace() || c.is_control() || "\"'<>\\?#@".contains(c)) {
+        return Err("That doesn't look like a repository URL.");
+    }
+    let (host, path) = rest.split_once('/').ok_or("Include the path to the repository, not just the site.")?;
+    let host = host.to_ascii_lowercase();
+    let valid_host = host.contains('.')
+        && host.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    if !valid_host || path.is_empty() || path.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+        return Err("That doesn't look like a repository URL.");
+    }
+    if host == "github.com" || host == "www.github.com" {
+        return Err("For GitHub repositories, choose \"GitHub\" and pick it from the list.");
+    }
+    Ok((format!("{host}/{path}"), format!("https://{host}/{path}")))
+}
+
+#[cfg(test)]
+mod external_repo_tests {
+    use super::normalize_external_repo as n;
+
+    #[test]
+    fn urls() {
+        assert_eq!(
+            n("https://GitLab.com/owner/game.git/"),
+            Ok(("gitlab.com/owner/game".into(), "https://gitlab.com/owner/game".into()))
+        );
+        assert!(n("https://github.com/a/b").is_err());
+        assert!(n("http://gitlab.com/a/b").is_err());
+        assert!(n("https://gitlab.com").is_err());
+        assert!(n("https://gitlab.com/a/../b").is_err());
+        assert!(n("javascript:alert(1)").is_err());
+        assert!(n("https://evil\".com/x").is_err());
+    }
+}
