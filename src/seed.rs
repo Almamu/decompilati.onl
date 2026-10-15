@@ -37,6 +37,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
             platform: platform.to_string(),
             repo: format!("demo/{slug}"),
             ai_contributions: String::new(),
+            discord: None,
             description: format!("A demo decompilation of {name}."),
             ai_generated: *ai,
         };

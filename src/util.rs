@@ -145,3 +145,39 @@ pub const RESERVED_NAMES: &[&str] = &[
 pub fn is_reserved_name(name: &str) -> bool {
     RESERVED_NAMES.iter().any(|r| r.eq_ignore_ascii_case(name))
 }
+
+/// Normalises a Discord invite (`discord.gg/abc`, `https://discord.com/invite/abc`, …) to
+/// `https://discord.gg/abc`. Empty input is `Ok(None)`; anything that isn't an invite is an error,
+/// so the field can't be used to link elsewhere.
+pub fn normalize_discord_invite(input: &str) -> Result<Option<String>, &'static str> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let s = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(s);
+    let s = s.strip_prefix("www.").unwrap_or(s);
+    let code = ["discord.gg/", "discord.com/invite/", "discordapp.com/invite/"]
+        .iter()
+        .find_map(|p| s.strip_prefix(p))
+        .map(|c| c.trim_end_matches('/'))
+        .ok_or("The Discord link must be an invite, like https://discord.gg/abc123.")?;
+    if !(2..=64).contains(&code.len()) || !code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err("That Discord invite code doesn't look right.");
+    }
+    Ok(Some(format!("https://discord.gg/{code}")))
+}
+
+#[cfg(test)]
+mod discord_tests {
+    use super::normalize_discord_invite as n;
+
+    #[test]
+    fn invites() {
+        assert_eq!(n(""), Ok(None));
+        assert_eq!(n("discord.gg/abc123"), Ok(Some("https://discord.gg/abc123".into())));
+        assert_eq!(n("https://discord.com/invite/Abc-123/"), Ok(Some("https://discord.gg/Abc-123".into())));
+        assert!(n("https://evil.example/discord.gg/x").is_err());
+        assert!(n("https://discord.gg/a b").is_err());
+        assert!(n("javascript:alert(1)").is_err());
+    }
+}

@@ -169,6 +169,8 @@ CREATE TABLE import_jobs (
 );
 CREATE INDEX import_jobs_project ON import_jobs(project_id, id);
 CREATE INDEX import_jobs_status ON import_jobs(status, id);
+"#, r#"
+ALTER TABLE projects ADD COLUMN discord TEXT;
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -228,6 +230,8 @@ pub struct Project {
     pub commits_json: String,
     /// The version shown on cards and listings; its progress is mirrored into this row.
     pub default_version: String,
+    /// Discord invite (`https://discord.gg/...`), if the project has a server.
+    pub discord: Option<String>,
 }
 
 impl Project {
@@ -256,6 +260,7 @@ pub struct ProjectMeta {
     pub platform: String,
     pub repo: String,
     pub ai_contributions: String,
+    pub discord: Option<String>,
     pub description: String,
     pub ai_generated: bool,
 }
@@ -265,7 +270,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
-    p.commits_json, p.default_version, p.functions_total, p.functions_matched";
+    p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord";
 
 fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
     Ok(Project {
@@ -300,6 +305,7 @@ fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
         commits_json: r.try_get(34)?,
         default_version: r.try_get(35)?,
         functions: FunctionStats { total: unsigned(r, 36)?, matching: unsigned(r, 37)? },
+        discord: r.try_get(38)?,
     })
 }
 
@@ -481,19 +487,19 @@ pub fn image_in_use(c: &mut Conn, image: &str) -> anyhow::Result<bool> {
 pub fn insert_project(c: &mut Conn, owner_id: i64, m: &ProjectMeta, image: &str, key_hash: &str, key_prefix: &str) -> anyhow::Result<i64> {
     let t = now();
     let row = c.query_one(
-        "INSERT INTO projects (slug, owner_id, name, platform, repo, ai_contributions, description, ai_generated, image,
+        "INSERT INTO projects (slug, owner_id, name, platform, repo, ai_contributions, discord, description, ai_generated, image,
                                api_key_hash, api_key_prefix, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
-        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t],
+         VALUES ($1, $2, $3, $4, $5, $6, $13, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
+        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord],
     )?;
     Ok(row.try_get(0)?)
 }
 
 pub fn update_project_meta(c: &mut Conn, id: i64, m: &ProjectMeta) -> anyhow::Result<()> {
     c.execute(
-        "UPDATE projects SET slug = $2, name = $3, platform = $4, repo = $5, ai_contributions = $6, description = $7,
+        "UPDATE projects SET slug = $2, name = $3, platform = $4, repo = $5, ai_contributions = $6, description = $7, discord = $10,
                              ai_generated = $8, updated_at = $9 WHERE id = $1",
-        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now()],
+        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord],
     )?;
     Ok(())
 }

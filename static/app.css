@@ -313,3 +313,9 @@ section > .search { margin: 0 0 12px; }
 .about-details[open] > summary::before { content: "▾ "; }
 .about-details > summary:hover { color: var(--text); border-color: var(--accent); }
 .about-details .about { margin-top: 0; }
+.link-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.link-buttons .btn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; }
+.icon { flex: none; }
+.btn-github { background: #24292f; color: #fff; }
+.btn-discord { background: #5865f2; color: #fff; }
+@media (prefers-color-scheme: dark) { .btn-github { background: #f0f3f6; color: #1f2328; } }

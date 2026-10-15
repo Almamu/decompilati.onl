@@ -8,7 +8,7 @@ use crate::{
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{code_bar, cover, data_bar, last_change, legend_code, platform_chip, vote},
+        components::{code_bar, cover, data_bar, icon_discord, icon_github, last_change, legend_code, platform_chip, vote},
         layout::time_ago,
         svg,
     },
@@ -31,8 +31,15 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 }
                 h1 { (p.name) }
                 p.links {
-                    a href={ "https://github.com/" (p.repo) } rel="noopener" { "github.com/" (p.repo) }
-                    " · by " a href={ "https://github.com/" (p.owner_login) } rel="noopener" { "@" (p.owner_login) }
+                    "by " a href={ "https://github.com/" (p.owner_login) } rel="noopener" { "@" (p.owner_login) }
+                }
+                div.link-buttons {
+                    a.btn.btn-github href={ "https://github.com/" (p.repo) } rel="noopener" title={ "github.com/" (p.repo) } {
+                        (icon_github()) span { "GitHub" }
+                    }
+                    @if let Some(invite) = &p.discord {
+                        a.btn.btn-discord href=(invite) rel="noopener nofollow" { (icon_discord()) span { "Discord" } }
+                    }
                 }
                 @if let Some((value, label)) = crate::db::AI_CONTRIBUTIONS.iter().find(|(v, _)| !v.is_empty() && *v == p.ai_contributions) {
                     p.ai-policy { span class={ "policy policy-" (value) } title="Whether the project accepts contributions made with AI tools" { "AI contributions: " strong { (label) } } }

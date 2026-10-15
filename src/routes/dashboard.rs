@@ -125,6 +125,7 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         .collect::<String>()
         .trim()
         .to_string();
+    let discord = crate::util::normalize_discord_invite(&f.discord)?;
     // The slug is fixed once created so links and badges keep working after a rename.
     let slug = match existing {
         Some(p) => p.slug.clone(),
@@ -136,6 +137,7 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         platform: f.platform.clone(),
         repo,
         ai_contributions,
+        discord,
         description,
         ai_generated: f.ai_generated.is_some(),
     })
@@ -158,6 +160,7 @@ async fn read_new_project_form(mut mp: Multipart) -> AppResult<(ProjectForm, Opt
             "platform" => f.platform = value,
             "repo" => f.repo = value,
             "ai_contributions" => f.ai_contributions = value,
+            "discord" => f.discord = value,
             "description" => f.description = value,
             "ai_generated" => f.ai_generated = Some(value),
             _ => {}

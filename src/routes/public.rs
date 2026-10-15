@@ -224,6 +224,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "repo": p.repo,
             "ai_generated": p.ai_generated,
             "ai_contributions": if p.ai_contributions.is_empty() { None } else { Some(&p.ai_contributions) },
+            "discord": p.discord,
             "unit": p.unit,
             "code": p.code,
             "data": p.data,
