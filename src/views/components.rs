@@ -22,12 +22,17 @@ pub fn ai_badge() -> Markup {
 pub fn cover(p: &Project, eager: bool) -> Markup {
     let plat = platforms::get_or_other(&p.platform);
     html! {
-        @if let Some(img) = &p.image {
-            img.cover src={ "/uploads/" (img) } alt={ (p.name) " cover art" } width="640" height="360"
-                loading=(if eager { "eager" } else { "lazy" }) decoding="async";
-        } @else {
-            div.cover.placeholder style={ "--chip:" (plat.color) } aria-hidden="true" {
-                span { (plat.short) }
+        div.cover-wrap {
+            @if let Some(img) = &p.image {
+                img.cover src={ "/uploads/" (img) } alt={ (p.name) " cover art" } width="640" height="360"
+                    loading=(if eager { "eager" } else { "lazy" }) decoding="async";
+            } @else {
+                div.cover.placeholder style={ "--chip:" (plat.color) } aria-hidden="true" {
+                    span { (plat.short) }
+                }
+            }
+            @if p.ai_generated {
+                span.badge.ai.on-cover title="Self-reported: this project is mainly AI-generated" { "AI generated" }
             }
         }
     }
@@ -112,12 +117,11 @@ pub fn vote(p: &Project) -> Markup {
 pub fn card(p: &Project, extra: Option<Markup>) -> Markup {
     html! {
         article.card {
-            a.card-cover href={ "/p/" (p.slug) } tabindex="-1" { (cover(p, false)) }
+            a.card-cover href={ "/projects/" (p.slug) } tabindex="-1" { (cover(p, false)) }
             div.card-body {
                 div.card-head {
                     (platform_chip(&p.platform))
-                    @if p.ai_generated { (ai_badge()) }
-                    h3 { a href={ "/p/" (p.slug) } { (p.name) } }
+                    h3 { a href={ "/projects/" (p.slug) } { (p.name) } }
                 }
                 (progress(p, false))
                 (last_change(p))

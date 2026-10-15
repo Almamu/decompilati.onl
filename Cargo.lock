@@ -294,6 +294,7 @@ dependencies = [
  "anyhow",
  "axum",
  "bytes",
+ "flate2",
  "hex",
  "image",
  "maud",

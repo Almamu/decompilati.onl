@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use maud::{html, Markup};
 
 use crate::{
@@ -7,13 +9,33 @@ use crate::{
     views::components::{ai_badge, card, card_grid, cover, last_change, legend, platform_chip, progress, vote},
 };
 
-pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], recent: &[&Project], total: usize) -> Markup {
+pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Project], total: usize) -> Markup {
     html! {
         section.hero {
             h1 { "Tracking the progress of game decompilation projects" }
             p.lead {
                 (total) " projects reverse-engineering games back into source code. "
                 "Progress is updated automatically by each project's CI."
+            }
+            div.about {
+                div {
+                    h2 { "What's a decomp?" }
+                    p { "A decompilation project rewrites a game's compiled machine code back into human-readable source code, usually C or C++, one function at a time. "
+                        "Code is " strong { "matching" } " when it compiles to exactly the same bytes as the original game, and " strong { "non-matching" } " when it behaves the same but doesn't compile to identical bytes yet. "
+                        "The result is real source code that people can study, port, fix and mod." }
+                }
+                div {
+                    h2 { "Decomp vs. recomp" }
+                    p { "A " strong { "recompilation" } " (static recomp) translates the original binary to another platform automatically, without recovering source code anyone can read. "
+                        "It gets a game running natively quickly, but what it produces is machine-generated. "
+                        "This site only tracks decompilations, where the code is reconstructed and understood. Projects that say they're mainly AI-generated get an " (ai_badge()) " badge." }
+                }
+                div {
+                    h2 { "Community votes" }
+                    p { "Logged-in users can upvote or downvote any project. "
+                        "Votes decide what gets featured: low-rated projects sink in the listings and are hidden past a threshold, so stalled, misleading or spam entries don't crowd out real work. "
+                        "Progress figures are reported by each project itself." }
+                }
             }
             (legend())
         }
@@ -40,15 +62,15 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], recent: &[&Proje
 
         section {
             div.section-head {
-                h2.section-title { "Recently updated" }
-                a href="/projects" { "All projects →" }
+                h2.section-title { "All projects " span.muted { "· most recently updated first" } }
+                a href="/platforms" { "By platform →" }
             }
-            (card_grid(recent))
+            (card_grid(projects))
         }
 
         section {
             h2.section-title { "Browse by platform" }
-            (platform_nav(None))
+            (platform_nav(None, projects))
         }
     }
 }
@@ -56,12 +78,11 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], recent: &[&Proje
 fn spotlight_card(p: &Project) -> Markup {
     html! {
         article.spot {
-            a.card-cover href={ "/p/" (p.slug) } tabindex="-1" { (cover(p, true)) }
+            a.card-cover href={ "/projects/" (p.slug) } tabindex="-1" { (cover(p, true)) }
             div.card-body {
                 div.card-head {
                     (platform_chip(&p.platform))
-                    @if p.ai_generated { (ai_badge()) }
-                    h3 { a href={ "/p/" (p.slug) } { (p.name) } }
+                    h3 { a href={ "/projects/" (p.slug) } { (p.name) } }
                 }
                 @if !p.description.is_empty() {
                     p.desc { (truncate(&p.description, 180)) }
@@ -82,21 +103,25 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-pub fn platform_nav(active: Option<&str>) -> Markup {
+/// Chips for the platforms that have at least one listed project, grouped by maker.
+pub fn platform_nav(active: Option<&str>, projects: &[&Project]) -> Markup {
+    let present: HashSet<&str> = projects.iter().map(|p| p.platform.as_str()).collect();
     let mut groups: Vec<(&str, Vec<&platforms::Platform>)> = Vec::new();
-    for p in PLATFORMS {
+    for p in PLATFORMS.iter().filter(|p| present.contains(p.slug) || active == Some(p.slug)) {
         match groups.last_mut() {
             Some((maker, list)) if *maker == p.maker => list.push(p),
             _ => groups.push((p.maker, vec![p])),
         }
     }
     html! {
-        div.platforms {
-            @for (maker, list) in &groups {
-                div.pgroup {
-                    span.maker { (maker) }
-                    @for p in list {
-                        a.chip.big.active[active == Some(p.slug)] href={ "/platform/" (p.slug) } style={ "--chip:" (p.color) } title=(p.name) { (p.short) }
+        @if !groups.is_empty() {
+            div.platforms {
+                @for (maker, list) in &groups {
+                    div.pgroup {
+                        span.maker { (maker) }
+                        @for p in list {
+                            a.chip.big.active[active == Some(p.slug)] href={ "/platform/" (p.slug) } style={ "--chip:" (p.color) } title=(p.name) { (p.short) }
+                        }
                     }
                 }
             }
@@ -104,12 +129,12 @@ pub fn platform_nav(active: Option<&str>) -> Markup {
     }
 }
 
-pub fn listing(title: &str, intro: Option<&str>, projects: &[&Project], hidden: &[&Project], active_platform: Option<&str>) -> Markup {
+pub fn listing(title: &str, intro: Option<&str>, projects: &[&Project], hidden: &[&Project], all: &[&Project], active_platform: Option<&str>) -> Markup {
     html! {
         section {
             h1 { (title) }
             @if let Some(i) = intro { p.lead { (i) } }
-            (platform_nav(active_platform))
+            (platform_nav(active_platform, all))
             (legend())
             (card_grid(projects))
         }
@@ -126,7 +151,7 @@ pub fn platforms_page(counts: &[(&'static platforms::Platform, usize)]) -> Marku
     html! {
         h1 { "Platforms" }
         div.platform-table {
-            @for (p, n) in counts {
+            @for (p, n) in counts.iter().filter(|(_, n)| *n > 0) {
                 a.platform-row href={ "/platform/" (p.slug) } {
                     span.chip.big style={ "--chip:" (p.color) } { (p.short) }
                     span.pname { (p.name) span.muted { " · " (p.maker) } }

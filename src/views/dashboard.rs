@@ -60,7 +60,7 @@ pub fn dashboard(u: &SessionUser, projects: &[Project]) -> Markup {
                 tbody {
                     @for p in projects {
                         tr {
-                            td { (platform_chip(&p.platform)) " " a href={ "/p/" (p.slug) } { (p.name) } }
+                            td { (platform_chip(&p.platform)) " " a href={ "/projects/" (p.slug) } { (p.name) } @if p.image.is_none() { " " span.badge.warn title="Upload a cover image to list this project" { "needs image" } } }
                             td { (fmt_pct(p.code.decompiled_pct())) }
                             td { @if p.data.total > 0 { (fmt_pct(p.data.pct())) } @else { "—" } }
                             td { @if let Some(t) = p.last_report_at { (time_ago(t)) } @else { span.muted { "never" } } }
@@ -144,8 +144,11 @@ pub fn new_project(f: &ProjectForm, repos: &RepoOptions, error: Option<&str>) ->
             p { a href="/dashboard" { "← Your projects" } }
             h1 { "Add a project" }
             @if let Some(e) = error { div.notice.err { (e) } }
-            form.form method="post" action="/dashboard/new" {
+            form.form method="post" action="/dashboard/new" enctype="multipart/form-data" {
                 (form_fields(f, repos))
+                label { "Cover image " span.muted { "(required — PNG, JPEG, WebP or GIF up to 5 MB, cropped to 16:9)" }
+                    input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" required;
+                }
                 p.muted { "The project's URL is generated from its name and stays the same if you rename it later." }
                 button.btn type="submit" disabled[!matches!(repos, RepoOptions::List(_))] { "Create project" }
             }
@@ -166,7 +169,7 @@ pub fn edit_project(
 ) -> Markup {
     html! {
         section.narrow {
-            p { a href="/dashboard" { "← Your projects" } " · " a href={ "/p/" (p.slug) } { "View public page" } }
+            p { a href="/dashboard" { "← Your projects" } " · " a href={ "/projects/" (p.slug) } { "View public page" } }
             h1 { (p.name) }
             @if let Some(e) = error { div.notice.err { (e) } }
             @if let Some(n) = notice { div.notice.ok { (n) } }
@@ -181,7 +184,7 @@ pub fn edit_project(
 
             div.panel {
                 h2 { "Details" }
-                p.muted { "Public URL: " a href={ "/p/" (p.slug) } { (base_url) "/p/" (p.slug) } }
+                p.muted { "Public URL: " a href={ "/projects/" (p.slug) } { (base_url) "/projects/" (p.slug) } }
                 form.form method="post" action={ "/dashboard/p/" (p.id) } {
                     (form_fields(f, repos))
                     button.btn type="submit" { "Save changes" }
@@ -190,16 +193,12 @@ pub fn edit_project(
 
             div.panel {
                 h2 { "Cover image" }
-                p.muted { "PNG, JPEG, WebP or GIF, up to 5 MB. It is resized to 640×360 (16:9)." }
+                p.muted { "Required. PNG, JPEG, WebP or GIF, up to 5 MB. It is resized to 640×360 (16:9)." }
+                @if p.image.is_none() { div.notice.err { "This project has no cover image, so it isn't shown in any listing. Upload one to publish it." } }
                 @if p.image.is_some() { div.cover-preview { (crate::views::components::cover(p, true)) } }
                 form.form method="post" action={ "/dashboard/p/" (p.id) "/image" } enctype="multipart/form-data" {
                     input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" required;
-                    button.btn type="submit" { "Upload" }
-                }
-                @if p.image.is_some() {
-                    form method="post" action={ "/dashboard/p/" (p.id) "/image/delete" } {
-                        button.btn.btn-ghost type="submit" { "Remove image" }
-                    }
+                    button.btn type="submit" { @if p.image.is_some() { "Replace image" } @else { "Upload" } }
                 }
             }
 
@@ -249,7 +248,7 @@ pub fn admin(projects: &[Project], users: &[User]) -> Markup {
                 tbody {
                     @for p in projects {
                         tr {
-                            td { (platform_chip(&p.platform)) " " a href={ "/p/" (p.slug) } { (p.name) } }
+                            td { (platform_chip(&p.platform)) " " a href={ "/projects/" (p.slug) } { (p.name) } }
                             td { "@" (p.owner_login) }
                             td { (p.score()) " (" (p.upvotes) "/" (p.downvotes) ")" }
                             td {

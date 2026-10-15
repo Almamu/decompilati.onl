@@ -35,6 +35,20 @@ const GH_ACTION: &str = r#"- name: Report progress
   env:
     BASE: "#;
 
+const OBJDIFF_ACTION: &str = r#"- name: Generate progress report
+  run: objdiff-cli report generate -o report.json
+
+- name: Send progress to decompilati.onl
+  if: github.ref == 'refs/heads/main'
+  run: |
+    gzip -kf report.json
+    curl --fail -sS -X POST "$BASE/api/v1/progress?commit=$GITHUB_SHA" \
+      -H "Authorization: Bearer ${{ secrets.DECOMP_API_KEY }}" \
+      -H "Content-Encoding: gzip" \
+      --data-binary @report.json.gz
+  env:
+    BASE: "#;
+
 pub fn docs(base_url: &str) -> Markup {
     html! {
         article.docs.narrow {
@@ -70,14 +84,23 @@ pub fn docs(base_url: &str) -> Markup {
                     tr { td { code { "commit" } ", " code { "message" } } td { "Optional commit hash and message shown as the last change." } }
                 }
             }
-            p.muted { "Limits: 1 MB per request, 120 reports per hour per project. Reports identical to the current state are accepted but not stored." }
+            p.muted { "Limits: 64 MB per request, 120 reports per hour per project. Reports identical to the current state are accepted but not stored." }
+
+            h2 { "objdiff reports (decomp.dev compatible)" }
+            p { "If your project already generates an " a href="https://github.com/encounter/objdiff" { "objdiff" } " report for decomp.dev, send that file as it is. "
+                "It's detected automatically (or force it with " code { "?format=objdiff" } "). Matched code counts as matching; fuzzy-matched code beyond that counts as non-matching; "
+                "data uses objdiff's matched data; and " code { "progress_categories" } " become areas, with their units inside them." }
+            p { "objdiff reports don't include a commit, so pass it in the query string. Reports can be large: send them gzip-compressed with "
+                code { "Content-Encoding: gzip" } " (up to 64 MB per request)." }
+            pre.code { (OBJDIFF_ACTION) (base_url) }
+            p { "After each report, the project page lists the commits since the previous report, fetched from GitHub." }
 
             h2 { "GitHub Actions example" }
             pre.code { (GH_ACTION) (base_url) }
 
             h2 { "Read-only endpoints" }
             ul {
-                li { code { "GET /p/{slug}/progress.json" } " — current progress of a project." }
+                li { code { "GET /projects/{slug}/progress.json" } " — current progress of a project." }
                 li { code { "GET /badge/{slug}.svg" } " — README badge." }
                 li { code { "GET /feed.xml" } " — RSS feed of recent updates." }
             }

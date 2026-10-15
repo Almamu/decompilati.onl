@@ -1,20 +1,18 @@
 use maud::{html, Markup, PreEscaped};
 
+use crate::github::{is_commit_hash, CommitList};
+
 use crate::{
     db::{Project, ReportRow},
     platforms,
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{ai_badge, code_bar, cover, data_bar, last_change, legend, platform_chip, vote},
+        components::{code_bar, cover, data_bar, last_change, legend, platform_chip, vote},
         layout::time_ago,
         svg,
     },
 };
-
-fn is_commit_hash(s: &str) -> bool {
-    (7..=40).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
 
 pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_votes: bool) -> Markup {
     let plat = platforms::get_or_other(&p.platform);
@@ -29,7 +27,6 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 div.card-head {
                     (platform_chip(&p.platform))
                     span.muted { (plat.name) }
-                    @if p.ai_generated { (ai_badge()) }
                 }
                 h1 { (p.name) }
                 p.links {
@@ -66,6 +63,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 }
             }
             (last_change(p))
+            (recent_commits(p))
         }
 
         @if !areas.is_empty() {
@@ -134,7 +132,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
         section.panel {
             h2 { "Badge" }
             p { img src={ "/badge/" (p.slug) ".svg" } alt="progress badge" height="20"; }
-            pre.code { "[![Decompilation progress](" (base_url) "/badge/" (p.slug) ".svg)](" (base_url) "/p/" (p.slug) ")" }
+            pre.code { "[![Decompilation progress](" (base_url) "/badge/" (p.slug) ".svg)](" (base_url) "/projects/" (p.slug) ")" }
         }
     }
 }
@@ -166,5 +164,39 @@ fn area_rows(a: &Area, depth: usize) -> Markup {
             td.num { (fmt_count(a.code.total)) }
         }
         @for c in &a.children { (area_rows(c, depth + 1)) }
+    }
+}
+
+/// Commits fetched from GitHub after the last progress report.
+fn recent_commits(p: &Project) -> Markup {
+    let list: CommitList = serde_json::from_str(&p.commits_json).unwrap_or_default();
+    if list.commits.is_empty() {
+        return html! {};
+    }
+    html! {
+        div.commits {
+            h3 {
+                "Latest commits"
+                @if let Some(cmp) = &list.compare {
+                    @if list.total > list.commits.len() {
+                        " " a.muted href={ "https://github.com/" (p.repo) "/compare/" (cmp) } rel="noopener" { "(" (list.total) " in this update)" }
+                    }
+                }
+            }
+            ul {
+                @for c in &list.commits {
+                    li {
+                        a href={ "https://github.com/" (p.repo) "/commit/" (c.sha) } rel="noopener" { code { (&c.sha[..7.min(c.sha.len())]) } }
+                        " " span.cmsg { (c.message) }
+                        span.muted {
+                            @if let Some(a) = &c.author { " — " (a) }
+                            @if let Some(ts) = c.date.as_deref().and_then(|d| time::OffsetDateTime::parse(d, &time::format_description::well_known::Rfc3339).ok()) {
+                                " · " (time_ago(ts.unix_timestamp()))
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

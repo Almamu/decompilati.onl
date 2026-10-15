@@ -222,3 +222,16 @@ pre.select { user-select: all; white-space: pre-wrap; word-break: break-all; }
   nav { gap: 12px; font-size: .92rem; }
   .stat dl { grid-template-columns: 1fr; }
 }
+.commits { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.commits h3 { font-size: .95rem; margin-bottom: 6px; }
+.commits ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: .88rem; }
+.commits li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.about { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 18px 0 8px; }
+.about > div { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.about h2 { font-size: 1rem; margin-bottom: .4em; }
+.about p { margin: 0; color: var(--muted); font-size: .9rem; }
+.about strong { color: var(--text); }
+.cover-wrap { position: relative; }
+.badge.ai.on-cover { position: absolute; left: 10px; bottom: 10px; font-size: .78rem; padding: 4px 10px; border-radius: 6px;
+  letter-spacing: .03em; text-transform: uppercase; box-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
+.project-cover .badge.ai.on-cover { font-size: .9rem; padding: 6px 12px; }

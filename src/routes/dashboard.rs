@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::{
     app::{AppError, AppResult, AppState},
     auth::{pushable_repos, RepoListError, RequireAdmin, RequireUser, SessionUser},
-    cache::project_paths,
+    cache::membership_paths,
     db::{self, Project, ProjectMeta},
     images, platforms,
     util::{clean_url, new_api_key, slugify, valid_slug},
@@ -136,7 +136,33 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
     })
 }
 
-pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, Form(f): Form<ProjectForm>) -> AppResult<Response> {
+/// Reads the new-project form: text fields plus the required cover image.
+async fn read_new_project_form(mut mp: Multipart) -> AppResult<(ProjectForm, Option<bytes::Bytes>)> {
+    let mut f = ProjectForm::default();
+    let mut image = None;
+    while let Some(field) = mp.next_field().await.map_err(|e| AppError::BadRequest(e.to_string()))? {
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "image" {
+            let data = field.bytes().await.map_err(|_| AppError::BadRequest("Upload failed or file too large.".into()))?;
+            image = Some(data).filter(|d| !d.is_empty());
+            continue;
+        }
+        let value = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+        match name.as_str() {
+            "name" => f.name = value,
+            "platform" => f.platform = value,
+            "repo" => f.repo = value,
+            "website" => f.website = value,
+            "description" => f.description = value,
+            "ai_generated" => f.ai_generated = Some(value),
+            _ => {}
+        }
+    }
+    Ok((f, image))
+}
+
+pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, mp: Multipart) -> AppResult<Response> {
+    let (f, image) = read_new_project_form(mp).await?;
     let uid = u.user.id;
     let count = state.db.run(move |c| Ok(db::projects_by_owner(c, uid)?.len())).await?;
     if count >= MAX_PROJECTS_PER_USER {
@@ -146,17 +172,25 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
         Ok(m) => m,
         Err(e) => return Ok(new_page(&state, &u, &f, Some(&e)).await),
     };
+    let Some(image) = image else {
+        return Ok(new_page(&state, &u, &f, Some("A cover image is required.")).await);
+    };
+    let dir = state.config.uploads_dir();
+    let stored = match tokio::task::spawn_blocking(move || images::store_cover(&image, &dir)).await? {
+        Ok(name) => name,
+        Err(e) => return Ok(new_page(&state, &u, &f, Some(&e)).await),
+    };
     let (key, hash, prefix) = new_api_key();
     let m = meta.clone();
     let project = state
         .db
         .run(move |c| {
-            let id = db::insert_project(c, uid, &m, &hash, &prefix)?;
+            let id = db::insert_project(c, uid, &m, &stored, &hash, &prefix)?;
             db::project_by_id(c, id)
         })
         .await?
         .ok_or(AppError::NotFound)?;
-    state.cache.invalidate(project_paths(&project.slug, &project.platform));
+    state.cache.invalidate(membership_paths(&project.slug, &project.platform));
     Ok(edit_page(&state, &u, &project, None, Some("Project created! Now set up your CI to report progress."), Some(&key)).await)
 }
 
@@ -199,8 +233,8 @@ pub async fn update(State(state): State<AppState>, RequireUser(u): RequireUser, 
         .await?
         .ok_or(AppError::NotFound)?;
     // The platform may have changed, so both the old and new listing pages are affected.
-    state.cache.invalidate(project_paths(&p.slug, &p.platform));
-    state.cache.invalidate(project_paths(&updated.slug, &updated.platform));
+    state.cache.invalidate(membership_paths(&p.slug, &p.platform));
+    state.cache.invalidate(membership_paths(&updated.slug, &updated.platform));
     Ok(edit_page(&state, &u, &updated, None, Some("Saved."), None).await)
 }
 
@@ -230,7 +264,7 @@ pub async fn upload_image(State(state): State<AppState>, RequireUser(u): Require
                 .await?
                 .ok_or(AppError::NotFound)?;
             remove_old_image(&state, p.image.as_deref(), &name).await;
-            state.cache.invalidate(project_paths(&p.slug, &p.platform));
+            state.cache.invalidate(membership_paths(&p.slug, &p.platform));
             Ok(edit_page(&state, &u, &updated, None, Some("Image updated."), None).await)
         }
     }
@@ -248,21 +282,6 @@ async fn remove_old_image(state: &AppState, old: Option<&str>, new: &str) {
             let _ = tokio::fs::remove_file(state.config.uploads_dir().join(old)).await;
         }
     }
-}
-
-pub async fn delete_image(State(state): State<AppState>, RequireUser(u): RequireUser, Path(id): Path<i64>) -> AppResult<Response> {
-    let p = owned(&state, &u, id).await?;
-    let updated = state
-        .db
-        .run(move |c| {
-            db::set_project_image(c, id, None)?;
-            db::project_by_id(c, id)
-        })
-        .await?
-        .ok_or(AppError::NotFound)?;
-    remove_old_image(&state, p.image.as_deref(), "").await;
-    state.cache.invalidate(project_paths(&p.slug, &p.platform));
-    Ok(edit_page(&state, &u, &updated, None, Some("Image removed."), None).await)
 }
 
 pub async fn regenerate_key(State(state): State<AppState>, RequireUser(u): RequireUser, Path(id): Path<i64>) -> AppResult<Response> {
@@ -291,7 +310,7 @@ pub async fn delete(State(state): State<AppState>, RequireUser(u): RequireUser, 
     }
     state.db.run(move |c| db::delete_project(c, id)).await?;
     remove_old_image(&state, p.image.as_deref(), "").await;
-    state.cache.invalidate(project_paths(&p.slug, &p.platform));
+    state.cache.invalidate(membership_paths(&p.slug, &p.platform));
     Ok(Redirect::to("/dashboard").into_response())
 }
 
@@ -306,7 +325,7 @@ async fn toggle(state: &AppState, id: i64, f: fn(&db::Conn, i64, bool) -> anyhow
     let p = state.db.run(move |c| db::project_by_id(c, id)).await?.ok_or(AppError::NotFound)?;
     let on = !get(&p);
     state.db.run(move |c| f(c, id, on)).await?;
-    state.cache.invalidate(project_paths(&p.slug, &p.platform));
+    state.cache.invalidate(membership_paths(&p.slug, &p.platform));
     Ok(Redirect::to("/admin").into_response())
 }
 
@@ -328,7 +347,7 @@ pub async fn admin_ban(State(state): State<AppState>, RequireAdmin(_u): RequireA
         })
         .await?;
     for p in projects {
-        state.cache.invalidate(project_paths(&p.slug, &p.platform));
+        state.cache.invalidate(membership_paths(&p.slug, &p.platform));
     }
     Ok(Redirect::to("/admin").into_response())
 }

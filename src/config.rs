@@ -10,6 +10,9 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub github_client_id: String,
     pub github_client_secret: String,
+    /// Optional token for GitHub API calls made by the server (commit lists); raises the
+    /// unauthenticated rate limit of 60 requests/hour.
+    pub github_api_token: Option<String>,
     pub cloudflare: Option<CloudflareConfig>,
     /// GitHub logins with admin rights (spotlight, hide, ban).
     pub admins: Vec<String>,
@@ -51,6 +54,7 @@ impl Config {
             data_dir,
             github_client_id: var("GITHUB_CLIENT_ID").unwrap_or_default(),
             github_client_secret: var("GITHUB_CLIENT_SECRET").unwrap_or_default(),
+            github_api_token: var("GITHUB_API_TOKEN"),
             cloudflare,
             admins: var("ADMIN_LOGINS")
                 .unwrap_or_default()

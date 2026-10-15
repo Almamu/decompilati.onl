@@ -117,8 +117,8 @@ pub fn project_paths(slug: &str, platform: &str) -> Vec<String> {
         "/projects".into(),
         "/platforms".into(),
         format!("/platform/{platform}"),
-        format!("/p/{slug}"),
-        format!("/p/{slug}/progress.json"),
+        format!("/projects/{slug}"),
+        format!("/projects/{slug}/progress.json"),
         format!("/badge/{slug}.svg"),
         "/feed.xml".into(),
     ]
@@ -179,4 +179,12 @@ async fn purge_worker(config: Config, mut rx: mpsc::UnboundedReceiver<String>) {
             });
         }
     }
+}
+
+/// `project_paths` plus every platform page: used when a project appears, disappears or
+/// changes platform, since the platform chips on every listing only show platforms in use.
+pub fn membership_paths(slug: &str, platform: &str) -> Vec<String> {
+    let mut paths = project_paths(slug, platform);
+    paths.extend(crate::platforms::PLATFORMS.iter().map(|p| format!("/platform/{}", p.slug)));
+    paths
 }

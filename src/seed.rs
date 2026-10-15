@@ -21,7 +21,7 @@ const DEMO: &[(&str, &str, &str, bool)] = &[
     ("Metroid Prime Hunters", "nds", "Alinos", false),
 ];
 
-pub fn run(db: &Db) -> anyhow::Result<()> {
+pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
     let mut c = db.conn()?;
     let user = db::upsert_user(&c, 1, "demo-user", Some("Demo User"), None)?;
     let mut rng = rand::thread_rng();
@@ -40,7 +40,8 @@ pub fn run(db: &Db) -> anyhow::Result<()> {
             description: format!("A demo decompilation of {name}."),
             ai_generated: *ai,
         };
-        let id = db::insert_project(&c, user.id, &meta, &hash, &prefix)?;
+        let image = demo_cover(platform, uploads)?;
+        let id = db::insert_project(&c, user.id, &meta, &image, &hash, &prefix)?;
         println!("{slug}: {key}");
 
         // Several reports spread over the last 60 days, with progress going up.
@@ -100,3 +101,17 @@ pub fn run(db: &Db) -> anyhow::Result<()> {
     Ok(())
 }
 
+
+/// A plain gradient in the platform's colour, stored like a real upload.
+fn demo_cover(platform: &str, uploads: &std::path::Path) -> anyhow::Result<String> {
+    let hex = crate::platforms::get_or_other(platform).color.trim_start_matches('#');
+    let c = u32::from_str_radix(hex, 16)?;
+    let (r, g, b) = ((c >> 16) as f32, ((c >> 8) & 0xff) as f32, (c & 0xff) as f32);
+    let img = image::RgbImage::from_fn(640, 360, |x, y| {
+        let t = 0.55 + 0.45 * (1.0 - (x + y) as f32 / 1000.0);
+        image::Rgb([(r * t) as u8, (g * t) as u8, (b * t) as u8])
+    });
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
+    crate::images::store_cover(&png, uploads).map_err(anyhow::Error::msg)
+}

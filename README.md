@@ -21,7 +21,7 @@ Login needs a GitHub OAuth app whose callback URL is `$BASE_URL/auth/github/call
 
 ## How caching works
 
-Public pages (`/`, `/projects`, `/platforms`, `/platform/*`, `/p/*`, badges, JSON, RSS, docs) are the
+Public pages (`/`, `/projects`, `/platforms`, `/platform/*`, `/projects/*`, badges, JSON, RSS, docs) are the
 same for every visitor. They never read or set cookies. Anything specific to the visitor (the user menu
 and vote state) is filled in by `static/app.js` from `/api/me`. That call only happens when the
 non-HttpOnly `li=1` hint cookie is present, so anonymous visitors never reach the origin.
@@ -64,6 +64,13 @@ The full format is documented on the site at `/docs` (source: `src/views/docs.rs
 In short: `code {total, matching, non_matching}`, `data {total, done}`, optional nested `areas` with
 the same stats, plus `commit` and `message`. Reports that don't change anything are acknowledged and
 then dropped.
+
+The webhook also accepts an [objdiff](https://github.com/encounter/objdiff) `report.json`, the format
+decomp.dev used. Send it as it is, optionally gzip-compressed with `Content-Encoding: gzip`, and pass
+`?commit=<sha>`. Matched code counts as matching. Fuzzy-matched code beyond that counts as
+non-matching (objdiff has no exact figure for it). Categories become areas. After each stored
+report, the server fetches the commits since the previous report from GitHub (set
+`GITHUB_API_TOKEN` to avoid the anonymous rate limit), and the project page lists them.
 
 ## Ranking and moderation
 

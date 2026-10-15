@@ -80,12 +80,11 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
         movers.sort_by(|a, b| b.1.total_cmp(&a.1));
         movers.truncate(6);
 
-        let recent: Vec<&Project> = visible.iter().copied().take(24).collect();
         let html = views::layout::render(Page {
             title: "",
             description: "Progress tracker for video game decompilation projects.",
             image: None,
-            body: views::home::home(&spotlight, &movers, &recent, visible.len()),
+            body: views::home::home(&spotlight, &movers, &visible, visible.len()),
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -99,6 +98,8 @@ async fn listing_page(state: &AppState, headers: &HeaderMap, key: String, platfo
         let mut shown: Vec<&Project> = all.iter().filter(|p| platform.is_none_or(|pl| p.platform == pl.slug)).collect();
         hot_sort(&mut shown);
         let (visible, hidden): (Vec<&Project>, Vec<&Project>) = shown.into_iter().partition(|p| is_visible(p, threshold));
+        // The platform chips cover every listed project, not just this page's.
+        let listed: Vec<&Project> = all.iter().filter(|p| is_visible(p, threshold)).collect();
         let (title, intro, desc) = match platform {
             Some(pl) => (pl.name.to_string(), None, format!("Decompilation projects for the {}.", pl.name)),
             None => ("All projects".to_string(), None, "Every decompilation project tracked on the site.".to_string()),
@@ -107,7 +108,7 @@ async fn listing_page(state: &AppState, headers: &HeaderMap, key: String, platfo
             title: &title,
             description: &desc,
             image: None,
-            body: views::home::listing(&title, intro, &visible, &hidden, platform.map(|p| p.slug)),
+            body: views::home::listing(&title, intro, &visible, &hidden, &listed, platform.map(|p| p.slug)),
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -147,7 +148,7 @@ async fn load_public_project(state: &AppState, slug: String) -> AppResult<Projec
 }
 
 pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
-    cached(&state, &headers, format!("/p/{slug}"), || async {
+    cached(&state, &headers, format!("/projects/{slug}"), || async {
         let p = load_public_project(&state, slug).await?;
         let pid = p.id;
         let (reports, owner_banned) = state
@@ -183,7 +184,7 @@ pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slu
 }
 
 pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
-    cached(&state, &headers, format!("/p/{slug}/progress.json"), || async {
+    cached(&state, &headers, format!("/projects/{slug}/progress.json"), || async {
         let p = load_public_project(&state, slug).await?;
         let body = serde_json::json!({
             "slug": p.slug,
@@ -255,7 +256,7 @@ pub async fn feed(State(state): State<AppState>, headers: HeaderMap) -> AppResul
                 .unwrap_or_default();
             let title = format!("{}: {} code decompiled", p.name, crate::util::fmt_pct(p.code.decompiled_pct()));
             xml.push_str(&format!(
-                "<item><title>{}</title><link>{base}/p/{}</link><guid isPermaLink=\"false\">{}-{ts}</guid><pubDate>{date}</pubDate><description>{}</description></item>",
+                "<item><title>{}</title><link>{base}/projects/{}</link><guid isPermaLink=\"false\">{}-{ts}</guid><pubDate>{date}</pubDate><description>{}</description></item>",
                 xml_escape(&title),
                 p.slug,
                 p.slug,
@@ -299,4 +300,14 @@ pub async fn upload(State(state): State<AppState>, Path(file): Path<String>, hea
             .into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// `/p/...` was the original project URL prefix; send it to `/projects/...` permanently.
+pub async fn old_project_url(Path(rest): Path<String>) -> Response {
+    let target = format!("/projects/{}", rest.trim_start_matches('/'));
+    (
+        StatusCode::MOVED_PERMANENTLY,
+        [(header::LOCATION, target), (header::CACHE_CONTROL, "public, max-age=86400".to_string())],
+    )
+        .into_response()
 }

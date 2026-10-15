@@ -50,11 +50,13 @@ platforms! {
     "xbox", "Xbox", "XBOX", "Microsoft", "#107c10";
     "x360", "Xbox 360", "X360", "Microsoft", "#5dc21e";
     "xone", "Xbox One", "XONE", "Microsoft", "#0e7a0d";
+    // PC
+    "dos", "MS-DOS", "DOS", "PC", "#4a5568";
+    "win", "Windows", "WIN", "PC", "#0078d4";
     // Others
     "pce", "PC Engine / TurboGrafx-16", "PCE", "NEC", "#e05a1c";
     "neogeo", "Neo Geo", "NEO", "SNK", "#c9a227";
     "arcade", "Arcade", "ARC", "Other", "#8a2be2";
-    "pc", "PC", "PC", "Other", "#4a5568";
     "other", "Other", "?", "Other", "#718096";
 }
 

@@ -3,8 +3,10 @@ mod assets;
 mod auth;
 mod cache;
 mod config;
+mod github;
 mod db;
 mod images;
+mod objdiff;
 mod platforms;
 mod report;
 mod routes;
@@ -21,7 +23,8 @@ use axum::{
     Router,
 };
 use tower_http::{
-    compression::CompressionLayer, set_header::SetResponseHeaderLayer, timeout::TimeoutLayer, trace::TraceLayer,
+    compression::CompressionLayer, set_header::SetResponseHeaderLayer,
+    timeout::TimeoutLayer, trace::TraceLayer,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -33,8 +36,10 @@ fn router(state: AppState) -> Router {
         .route("/projects", get(public::projects))
         .route("/platforms", get(public::platforms_index))
         .route("/platform/{slug}", get(public::platform))
-        .route("/p/{slug}", get(public::project))
-        .route("/p/{slug}/progress.json", get(public::project_json))
+        .route("/projects/{slug}", get(public::project))
+        .route("/projects/{slug}/progress.json", get(public::project_json))
+        // Old project URLs, kept working for links and badges shared before the move.
+        .route("/p/{*rest}", get(public::old_project_url))
         .route("/badge/{file}", get(public::badge))
         .route("/docs", get(public::docs))
         .route("/feed.xml", get(public::feed))
@@ -47,13 +52,15 @@ fn router(state: AppState) -> Router {
         .route("/auth/github/callback", get(auth::callback))
         .route("/auth/logout", post(auth::logout))
         .route("/dashboard", get(dashboard::index))
-        .route("/dashboard/new", get(dashboard::new_form).post(dashboard::create))
+        .route(
+            "/dashboard/new",
+            get(dashboard::new_form).post(dashboard::create).layer(DefaultBodyLimit::max(images::MAX_UPLOAD + 64 * 1024)),
+        )
         .route("/dashboard/p/{id}", get(dashboard::edit).post(dashboard::update))
         .route(
             "/dashboard/p/{id}/image",
             post(dashboard::upload_image).layer(DefaultBodyLimit::max(images::MAX_UPLOAD + 64 * 1024)),
         )
-        .route("/dashboard/p/{id}/image/delete", post(dashboard::delete_image))
         .route("/dashboard/p/{id}/key", post(dashboard::regenerate_key))
         .route("/dashboard/p/{id}/delete", post(dashboard::delete))
         .route("/admin", get(dashboard::admin))
@@ -62,7 +69,11 @@ fn router(state: AppState) -> Router {
         .route("/admin/u/{id}/ban", post(dashboard::admin_ban))
         .route("/api/me", get(api::me))
         .route("/api/v1/vote", post(api::vote))
-        .route("/api/v1/progress", post(api::progress))
+        // objdiff reports can be large (they may also arrive gzip-compressed).
+        .route(
+            "/api/v1/progress",
+            post(api::progress).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .layer(SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store")));
 
     Router::new()
@@ -101,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(config.uploads_dir())?;
     let db = db::Db::open(&config.database_path)?;
     if std::env::args().nth(1).as_deref() == Some("seed-demo") {
-        return seed::run(&db);
+        return seed::run(&db, &config.uploads_dir());
     }
     let bind = config.bind;
     let state = AppState::new(config, db)?;

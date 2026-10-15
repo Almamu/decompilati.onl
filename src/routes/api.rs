@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -14,12 +14,23 @@ use crate::{
     auth::{MaybeUser, RequireUser},
     cache::project_paths,
     db,
+    objdiff,
     report::ReportInput,
     util::sha256_hex,
 };
 
-/// `POST /api/v1/progress` — the progress webhook.
-pub async fn progress(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
+#[derive(Deserialize)]
+pub struct ProgressQuery {
+    /// `objdiff` forces objdiff's report format; by default it's detected from the body.
+    format: Option<String>,
+    /// Commit and message for report formats that don't carry them (objdiff).
+    commit: Option<String>,
+    message: Option<String>,
+}
+
+/// `POST /api/v1/progress` — the progress webhook. Accepts our own report format or an
+/// objdiff `report.json` (optionally gzip-compressed with `Content-Encoding: gzip`).
+pub async fn progress(State(state): State<AppState>, Query(q): Query<ProgressQuery>, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
     let key = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -38,18 +49,38 @@ pub async fn progress(State(state): State<AppState>, headers: HeaderMap, body: B
         return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded (120 reports per hour)".into()));
     }
 
-    let input: ReportInput =
-        serde_json::from_slice(&body).map_err(|e| ApiError::bad(format!("invalid JSON: {e}")))?;
-    let report = input.normalize().map_err(ApiError::bad)?;
+    let gzip = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"gzip"));
 
-    let (slug, platform) = (project.slug.clone(), project.platform.clone());
+    // Parsing a multi-megabyte objdiff report is CPU work; keep it off the async workers.
+    let report = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let body = if gzip { gunzip(&body)? } else { body.to_vec() };
+        let input = if q.format.as_deref() == Some("objdiff") || objdiff::looks_like_objdiff(&body) {
+            let r: objdiff::Report = serde_json::from_slice(&body).map_err(|e| format!("invalid objdiff report: {e}"))?;
+            let mut input = r.into_input(q.commit, q.message);
+            input.layout = Some("treemap".into());
+            input
+        } else {
+            let mut input: ReportInput = serde_json::from_slice(&body).map_err(|e| format!("invalid JSON: {e}"))?;
+            input.commit = input.commit.or(q.commit);
+            input.message = input.message.or(q.message);
+            input
+        };
+        input.normalize()
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?
+    .map_err(ApiError::bad)?;
+
+    let commit = report.commit.clone();
+    let before = project.clone();
     let changed = state.db.run(move |c| db::apply_report(c, &project, &report)).await?;
     if changed {
-        state.cache.invalidate(project_paths(&slug, &platform));
+        state.cache.invalidate(project_paths(&before.slug, &before.platform));
+        crate::github::spawn_commit_fetch(state.clone(), before.clone(), commit);
     }
     Ok(Json(serde_json::json!({
         "status": if changed { "updated" } else { "unchanged" },
-        "project": slug,
+        "project": before.slug,
     }))
     .into_response())
 }
@@ -107,4 +138,19 @@ pub async fn vote(State(state): State<AppState>, RequireUser(u): RequireUser, Js
         Json(serde_json::json!({ "up": up, "down": down, "score": up - down, "value": v.value })),
     )
         .into_response())
+}
+
+/// Decompresses a gzip request body, refusing anything that inflates past 128 MB.
+fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    const MAX: u64 = 128 * 1024 * 1024;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(MAX + 1)
+        .read_to_end(&mut out)
+        .map_err(|_| "invalid gzip body".to_string())?;
+    if out.len() as u64 > MAX {
+        return Err("decompressed body is too large".into());
+    }
+    Ok(out)
 }

@@ -94,6 +94,8 @@ CREATE TABLE votes (
     PRIMARY KEY (user_id, project_id)
 ) WITHOUT ROWID;
 CREATE INDEX votes_project ON votes(project_id);
+"#, r#"
+ALTER TABLE projects ADD COLUMN commits_json TEXT NOT NULL DEFAULT '{}';
 "#];
 
 #[derive(Debug, Clone)]
@@ -137,6 +139,8 @@ pub struct Project {
     pub downvotes: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Recent commits fetched from GitHub after the last report (see `github::CommitList`).
+    pub commits_json: String,
 }
 
 impl Project {
@@ -173,7 +177,8 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.image, p.ai_generated, p.spotlight, p.hidden, p.api_key_prefix, p.unit, p.layout,
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
-    p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at";
+    p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
+    p.commits_json";
 
 fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -205,6 +210,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         downvotes: r.get(31)?,
         created_at: r.get(32)?,
         updated_at: r.get(33)?,
+        commits_json: r.get(34)?,
     })
 }
 
@@ -336,9 +342,10 @@ fn query_projects(c: &Conn, where_sql: &str, p: impl rusqlite::Params) -> anyhow
     Ok(rows)
 }
 
-/// All projects that may appear in public listings (not admin-hidden, owner not banned).
+/// All projects that may appear in public listings (not admin-hidden, owner not banned,
+/// and with the required cover image).
 pub fn public_projects(c: &Conn) -> anyhow::Result<Vec<Project>> {
-    query_projects(c, "WHERE p.hidden = 0 AND u.is_banned = 0", [])
+    query_projects(c, "WHERE p.hidden = 0 AND u.is_banned = 0 AND p.image IS NOT NULL", [])
 }
 
 pub fn all_projects(c: &Conn) -> anyhow::Result<Vec<Project>> {
@@ -365,13 +372,13 @@ pub fn slug_taken(c: &Conn, slug: &str, except_id: i64) -> anyhow::Result<bool> 
     Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE slug = ?1 AND id != ?2)", params![slug, except_id], |r| r.get(0))?)
 }
 
-pub fn insert_project(c: &Conn, owner_id: i64, m: &ProjectMeta, key_hash: &str, key_prefix: &str) -> anyhow::Result<i64> {
+pub fn insert_project(c: &Conn, owner_id: i64, m: &ProjectMeta, image: &str, key_hash: &str, key_prefix: &str) -> anyhow::Result<i64> {
     let t = now();
     c.execute(
-        "INSERT INTO projects (slug, owner_id, name, platform, repo, website, description, ai_generated,
+        "INSERT INTO projects (slug, owner_id, name, platform, repo, website, description, ai_generated, image,
                                api_key_hash, api_key_prefix, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-        params![m.slug, owner_id, m.name, m.platform, m.repo, m.website, m.description, m.ai_generated, key_hash, key_prefix, t],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+        params![m.slug, owner_id, m.name, m.platform, m.repo, m.website, m.description, m.ai_generated, image, key_hash, key_prefix, t],
     )?;
     Ok(c.last_insert_rowid())
 }
@@ -429,7 +436,8 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report) -> anyhow::Resu
             prev_code_total = code_total, prev_code_matching = code_matching, prev_code_nonmatching = code_nonmatching,
             prev_data_total = data_total, prev_data_done = data_done,
             code_total = ?2, code_matching = ?3, code_nonmatching = ?4, data_total = ?5, data_done = ?6,
-            unit = ?7, layout = ?8, areas_json = ?9, last_report_at = ?10, last_commit = ?11, last_message = ?12
+            unit = ?7, layout = ?8, areas_json = ?9, last_report_at = ?10, last_commit = ?11, last_message = ?12,
+            commits_json = '{}'
          WHERE id = ?1",
         params![
             project.id, r.code.total, r.code.matching, r.code.non_matching, r.data.total, r.data.done,
@@ -521,4 +529,12 @@ pub fn user_votes(c: &Conn, user_id: i64) -> anyhow::Result<Vec<(i64, i64)>> {
 /// `public_projects` with the signature `Db::run` expects.
 pub fn public_projects_owned(c: &mut Conn) -> anyhow::Result<Vec<Project>> {
     public_projects(c)
+}
+
+/// Stores the commits fetched for a report, unless a newer report has arrived meanwhile.
+pub fn set_commits(c: &Conn, project_id: i64, for_commit: Option<&str>, commits_json: &str) -> anyhow::Result<bool> {
+    Ok(c.execute(
+        "UPDATE projects SET commits_json = ?3 WHERE id = ?1 AND last_commit IS ?2",
+        params![project_id, for_commit, commits_json],
+    )? > 0)
 }
