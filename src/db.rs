@@ -133,6 +133,23 @@ ALTER TABLE project_versions ADD COLUMN functions_total INTEGER NOT NULL DEFAULT
 ALTER TABLE project_versions ADD COLUMN functions_matched INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN functions_total INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN functions_matched INTEGER NOT NULL DEFAULT 0;
+"#, r#"
+CREATE TABLE import_jobs (
+    id              INTEGER PRIMARY KEY,
+    project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    requested_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'finished', 'failed')),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    runs_total      INTEGER NOT NULL DEFAULT 0,
+    runs_done       INTEGER NOT NULL DEFAULT 0,
+    imported        INTEGER NOT NULL DEFAULT 0,
+    error           TEXT,
+    created_at      INTEGER NOT NULL,
+    started_at      INTEGER,
+    finished_at     INTEGER
+);
+CREATE INDEX import_jobs_project ON import_jobs(project_id, id);
+CREATE INDEX import_jobs_status ON import_jobs(status, id);
 "#];
 
 #[derive(Debug, Clone)]
@@ -757,4 +774,122 @@ pub fn set_commits(c: &mut Conn, project_id: i64, version: &str, for_commit: Opt
 /// Projects registered for a GitHub repository (`owner/name`, case-insensitive).
 pub fn projects_by_repo(c: &mut Conn, repo: &str) -> anyhow::Result<Vec<Project>> {
     query_projects(c, "WHERE lower(p.repo) = lower(?1) AND u.is_banned = 0", [repo])
+}
+
+// ---------------------------------------------------------------- import jobs
+
+/// A history import job (see `github_app::start_history_import`).
+#[derive(Debug, Clone)]
+pub struct ImportJob {
+    pub id: i64,
+    #[allow(dead_code)]
+    pub project_id: i64,
+    pub project_slug: String,
+    pub project_name: String,
+    pub status: String,
+    pub attempts: i64,
+    pub runs_total: i64,
+    pub runs_done: i64,
+    pub imported: i64,
+    pub error: Option<String>,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    /// Jobs queued ahead of this one (only meaningful while queued).
+    pub queue_position: i64,
+}
+
+impl ImportJob {
+    pub fn is_active(&self) -> bool {
+        self.status == "queued" || self.status == "running"
+    }
+}
+
+const JOB_COLS: &str = "j.id, j.project_id, p.slug, p.name, j.status, j.attempts, j.runs_total, j.runs_done, j.imported,
+    j.error, j.created_at, j.started_at, j.finished_at,
+    (SELECT COUNT(*) FROM import_jobs q WHERE q.status = 'queued' AND q.id < j.id)";
+
+fn job_from_row(r: &Row) -> rusqlite::Result<ImportJob> {
+    Ok(ImportJob {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        project_slug: r.get(2)?,
+        project_name: r.get(3)?,
+        status: r.get(4)?,
+        attempts: r.get(5)?,
+        runs_total: r.get(6)?,
+        runs_done: r.get(7)?,
+        imported: r.get(8)?,
+        error: r.get(9)?,
+        created_at: r.get(10)?,
+        started_at: r.get(11)?,
+        finished_at: r.get(12)?,
+        queue_position: r.get(13)?,
+    })
+}
+
+/// Queues an import for a project, or returns `None` if one is already queued or running.
+pub fn create_import_job(c: &mut Conn, project_id: i64, user_id: i64) -> anyhow::Result<Option<i64>> {
+    let tx = c.transaction()?;
+    let active: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM import_jobs WHERE project_id = ?1 AND status IN ('queued', 'running'))",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    if active {
+        return Ok(None);
+    }
+    tx.execute(
+        "INSERT INTO import_jobs (project_id, requested_by, status, created_at) VALUES (?1, ?2, 'queued', ?3)",
+        params![project_id, user_id, now()],
+    )?;
+    let id = tx.last_insert_rowid();
+    tx.commit()?;
+    Ok(Some(id))
+}
+
+pub fn latest_import_job(c: &Conn, project_id: i64) -> anyhow::Result<Option<ImportJob>> {
+    let sql = format!("SELECT {JOB_COLS} FROM import_jobs j JOIN projects p ON p.id = j.project_id WHERE j.project_id = ?1 ORDER BY j.id DESC LIMIT 1");
+    Ok(c.query_row(&sql, [project_id], job_from_row).optional()?)
+}
+
+pub fn recent_import_jobs(c: &Conn, limit: usize) -> anyhow::Result<Vec<ImportJob>> {
+    let sql = format!("SELECT {JOB_COLS} FROM import_jobs j JOIN projects p ON p.id = j.project_id ORDER BY j.id DESC LIMIT ?1");
+    let mut st = c.prepare_cached(&sql)?;
+    let rows = st.query_map([limit as i64], job_from_row)?.collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// After a restart: jobs that were running are queued again, and every unfinished job is
+/// returned (oldest first) so it can be started.
+pub fn unfinished_import_jobs(c: &Conn) -> anyhow::Result<Vec<(i64, i64)>> {
+    c.execute("UPDATE import_jobs SET status = 'queued' WHERE status = 'running'", [])?;
+    let mut st = c.prepare("SELECT id, project_id FROM import_jobs WHERE status = 'queued' ORDER BY id")?;
+    let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// Marks a job as running and returns how many times it has been started, this one included.
+pub fn start_import_job(c: &Conn, id: i64) -> anyhow::Result<i64> {
+    c.execute(
+        "UPDATE import_jobs SET status = 'running', attempts = attempts + 1, started_at = ?2, error = NULL WHERE id = ?1",
+        params![id, now()],
+    )?;
+    Ok(c.query_row("SELECT attempts FROM import_jobs WHERE id = ?1", [id], |r| r.get(0))?)
+}
+
+pub fn import_job_progress(c: &Conn, id: i64, runs_total: usize, runs_done: usize, imported: usize) -> anyhow::Result<()> {
+    c.execute(
+        "UPDATE import_jobs SET runs_total = ?2, runs_done = ?3, imported = ?4 WHERE id = ?1",
+        params![id, runs_total as i64, runs_done as i64, imported as i64],
+    )?;
+    Ok(())
+}
+
+pub fn finish_import_job(c: &Conn, id: i64, error: Option<&str>) -> anyhow::Result<()> {
+    c.execute(
+        "UPDATE import_jobs SET status = ?2, error = ?3, finished_at = ?4 WHERE id = ?1",
+        params![id, if error.is_some() { "failed" } else { "finished" }, error, now()],
+    )?;
+    Ok(())
 }

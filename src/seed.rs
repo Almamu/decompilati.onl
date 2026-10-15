@@ -4,7 +4,7 @@ use rand::Rng;
 
 use crate::{
     db::{self, Db, ProjectMeta},
-    report::{AreaInput, CodeStats, DataStats, ReportInput},
+    report::{AreaInput, CodeStats, DataStats, FunctionStats, ReportInput},
     util::{new_api_key, now},
 };
 
@@ -62,6 +62,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
                                 description: None,
                                 code: Some(CodeStats { total: total / 4, matching: matching / 4, non_matching: non_matching / 4 }),
                                 data: None,
+                                functions: Some(FunctionStats { total: total / 1600, matching: matching / 1600 }),
                                 weight: None,
                                 children: vec![],
                             })
@@ -74,6 +75,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
                         description: Some("Demo area".into()),
                         code: if children.is_empty() { Some(CodeStats { total, matching, non_matching }) } else { None },
                         data: Some(DataStats { total: total / 4, done: (total as f64 / 4.0 * p) as u64 }),
+                        functions: children.is_empty().then(|| FunctionStats { total: total / 400, matching: matching / 400 }),
                         weight: None,
                         children,
                     }

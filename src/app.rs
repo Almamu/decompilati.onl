@@ -18,8 +18,8 @@ pub struct AppState {
     pub limiter: Arc<RateLimiter>,
     /// Per-user cache of pushable GitHub repos: user id -> (fetched at, repos).
     pub repo_cache: Arc<Mutex<HashMap<i64, (i64, Vec<String>)>>>,
-    /// History imports by project id (see `github_app::start_history_import`).
-    pub imports: Arc<Mutex<HashMap<i64, crate::github_app::ImportStatus>>>,
+    /// Slots for history imports running at the same time (see `github_app`).
+    pub import_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -36,7 +36,7 @@ impl AppState {
             http,
             limiter: Arc::new(RateLimiter::default()),
             repo_cache: Arc::default(),
-            imports: Arc::default(),
+            import_slots: Arc::new(tokio::sync::Semaphore::new(crate::github_app::MAX_CONCURRENT_IMPORTS)),
         })
     }
 }

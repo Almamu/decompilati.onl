@@ -125,6 +125,10 @@ async fn main() -> anyhow::Result<()> {
     let bind = config.bind;
     let state = AppState::new(config, db)?;
 
+    if let Err(e) = github_app::resume_import_jobs(&state).await {
+        tracing::error!(error = %e, "couldn't resume history imports");
+    }
+
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("listening on http://{bind}");
     axum::serve(listener, router(state))

@@ -123,8 +123,53 @@
     });
   }
 
+  // History chart: a guide line and a tooltip with the values under the pointer.
+  function initCharts() {
+    document.querySelectorAll(".history-wrap").forEach(function (wrap) {
+      var chart;
+      try { chart = JSON.parse(wrap.dataset.chart); } catch (e) { return; }
+      var svg = wrap.querySelector("svg"), line = wrap.querySelector(".h-cursor"), tip = wrap.querySelector(".h-tip");
+      var pts = chart.points;
+      if (!svg || !line || !tip || !pts.length) return;
+      var plotW = chart.w - chart.l - chart.r, span = Math.max(chart.t1 - chart.t0, 1);
+      var fmt = function (v) { return v.toFixed(2) + "%"; };
+
+      function show(ev) {
+        var rect = svg.getBoundingClientRect();
+        var x = (ev.clientX - rect.left) * chart.w / rect.width;
+        x = Math.min(Math.max(x, chart.l), chart.w - chart.r);
+        var t = chart.t0 + (x - chart.l) / plotW * span;
+        // The chart is a step line: the value holds until the next report.
+        var p = pts[0];
+        for (var i = 0; i < pts.length && pts[i][0] <= t; i++) p = pts[i];
+        line.setAttribute("x1", x);
+        line.setAttribute("x2", x);
+        line.setAttribute("visibility", "visible");
+        tip.textContent = "";
+        tip.appendChild(el("strong", {}, new Date(p[0] * 1000).toLocaleString()));
+        [["decomp", "Decompiled", p[1]], ["matching", "Matching", p[2]], ["data", "Data", p[3]]].forEach(function (row) {
+          if (row[2] === null || row[2] === undefined) return;
+          var r = el("div", {});
+          r.appendChild(el("span", { class: "sw " + row[0] }));
+          r.appendChild(document.createTextNode(row[1] + " " + fmt(row[2])));
+          tip.appendChild(r);
+        });
+        if (p[4]) tip.appendChild(el("div", { class: "muted" }, "commit " + p[4]));
+        tip.hidden = false;
+        var px = ev.clientX - rect.left, w = tip.offsetWidth;
+        tip.style.left = (px + 14 + w > rect.width ? px - 14 - w : px + 14) + "px";
+        tip.style.top = Math.max(0, ev.clientY - rect.top - tip.offsetHeight / 2) + "px";
+      }
+      function hide() { line.setAttribute("visibility", "hidden"); tip.hidden = true; }
+      svg.addEventListener("pointermove", show);
+      svg.addEventListener("pointerdown", show);
+      svg.addEventListener("pointerleave", hide);
+    });
+  }
+
   function init() {
     relTimes();
+    initCharts();
     // Only logged-in visitors (who carry the "li" hint cookie) need to hit the origin.
     if (!/(?:^|;\s*)li=1/.test(document.cookie)) { initVotes(null); return; }
     fetch("/api/me", { credentials: "same-origin" })

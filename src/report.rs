@@ -58,6 +58,9 @@ pub struct FunctionStats {
 }
 
 impl FunctionStats {
+    pub fn is_empty(&self) -> bool {
+        self.total == 0
+    }
     pub fn pct(&self) -> f64 {
         pct(self.matching, self.total)
     }
@@ -91,6 +94,8 @@ pub struct AreaInput {
     pub description: Option<String>,
     pub code: Option<CodeStats>,
     pub data: Option<DataStats>,
+    /// Function counts; summed from the children when missing.
+    pub functions: Option<FunctionStats>,
     /// Relative tile size in the map; defaults to the code total.
     pub weight: Option<f64>,
     #[serde(default)]
@@ -105,6 +110,8 @@ pub struct Area {
     pub description: Option<String>,
     pub code: CodeStats,
     pub data: DataStats,
+    #[serde(default, skip_serializing_if = "FunctionStats::is_empty")]
+    pub functions: FunctionStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -194,6 +201,17 @@ fn normalize_area(a: AreaInput, depth: usize, count: &mut usize, path: &str) -> 
         Some(d) => d,
         None => children.iter().fold(DataStats::default(), |mut acc, c| { acc.add(&c.data); acc }),
     };
+    let functions = match a.functions {
+        Some(f) => f,
+        None => children.iter().fold(FunctionStats::default(), |mut acc, c| {
+            acc.total += c.functions.total;
+            acc.matching += c.functions.matching;
+            acc
+        }),
+    };
+    if functions.matching > functions.total {
+        return Err(format!("{here}: functions.matching exceeds functions.total"));
+    }
     check_code(&code, &here)?;
     check_data(&data, &here)?;
     if let Some(w) = a.weight
@@ -205,6 +223,7 @@ fn normalize_area(a: AreaInput, depth: usize, count: &mut usize, path: &str) -> 
         description: a.description.map(|d| clean_text(&d, 300)).filter(|d| !d.is_empty()),
         code,
         data,
+        functions,
         weight: a.weight,
         children,
     })

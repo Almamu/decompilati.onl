@@ -105,6 +105,9 @@ fn area_tooltip(a: &Area, unit: &str) -> String {
     if a.data.total > 0 {
         let _ = write!(t, "\nData: {} ({} {unit})", fmt_pct(a.data.pct()), fmt_count(a.data.total));
     }
+    if a.functions.total > 0 {
+        let _ = write!(t, "\nFunctions: {}/{} matching", fmt_count(a.functions.matching), fmt_count(a.functions.total));
+    }
     if let Some(d) = &a.description {
         let _ = write!(t, "\n{d}");
     }
@@ -225,8 +228,30 @@ pub fn history(rows: &[ReportRow]) -> String {
         }
         let _ = write!(out, r#"<polyline class="{class}" points="{pts}"/>"#);
     }
+    // Guide line moved by app.js under the pointer.
+    let _ = write!(out, r#"<line class="h-cursor" x1="0" x2="0" y1="{T}" y2="{}" visibility="hidden"/>"#, H - B);
     out.push_str("</svg>");
-    out
+
+    // The data behind the chart, for app.js's hover tooltip: geometry, then one
+    // [time, decompiled %, matching %, data % or null, commit] row per report.
+    let points: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let round = |v: f64| (v * 100.0).round() / 100.0;
+            serde_json::json!([
+                r.created_at,
+                round(r.code.decompiled_pct()),
+                round(r.code.matching_pct()),
+                if has_data { Some(round(r.data.pct())) } else { None },
+                r.commit.as_deref().map(|c| &c[..7.min(c.len())]),
+            ])
+        })
+        .collect();
+    let chart = serde_json::json!({ "w": W, "l": L, "r": R, "t0": t0, "t1": t1, "points": points });
+    format!(
+        r#"<div class="history-wrap" data-chart="{}">{out}<div class="h-tip" hidden></div></div>"#,
+        esc(&chart.to_string())
+    )
 }
 
 /// Shields-style badge. `pct` picks the colour; `None` draws a grey "not reported" badge.

@@ -204,7 +204,7 @@ async fn edit_form_page(state: &AppState, u: &SessionUser, p: &Project, f: &Proj
         .await
         .unwrap_or_default();
     let app_slug = state.config.github_app.as_ref().map(|a| a.slug.as_str());
-    let import = state.imports.lock().get(&p.id).cloned();
+    let import = state.db.run(move |c| db::latest_import_job(c, pid)).await.ok().flatten();
     page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, app_slug, &versions, import.as_ref()))
 }
 
@@ -333,8 +333,11 @@ pub async fn delete(State(state): State<AppState>, RequireUser(u): RequireUser, 
 // ---------------------------------------------------------------- admin
 
 pub async fn admin(State(state): State<AppState>, RequireAdmin(_u): RequireAdmin) -> AppResult<Response> {
-    let (projects, users) = state.db.run(|c| Ok((db::all_projects(c)?, db::list_users(c)?))).await?;
-    Ok(page("Admin", views::dashboard::admin(&projects, &users)))
+    let (projects, users, jobs) = state
+        .db
+        .run(|c| Ok((db::all_projects(c)?, db::list_users(c)?, db::recent_import_jobs(c, 50)?)))
+        .await?;
+    Ok(page("Admin", views::dashboard::admin(&projects, &users, &jobs)))
 }
 
 async fn toggle(state: &AppState, id: i64, f: fn(&db::Conn, i64, bool) -> anyhow::Result<()>, get: fn(&Project) -> bool) -> AppResult<Response> {
@@ -371,8 +374,8 @@ pub async fn admin_ban(State(state): State<AppState>, RequireAdmin(_u): RequireA
 /// Starts importing the project's history from its past GitHub Actions runs.
 pub async fn import_history(State(state): State<AppState>, RequireUser(u): RequireUser, Path(id): Path<i64>) -> AppResult<Response> {
     let p = owned(&state, &u, id).await?;
-    match crate::github_app::start_history_import(&state, p.clone()).await {
-        Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("History import started. It runs in the background; reload this page to follow it."), None).await),
+    match crate::github_app::start_history_import(&state, &p, u.user.id).await {
+        Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("History import queued. It runs in the background; reload this page to follow it."), None).await),
         Err(e) => Ok(edit_page(&state, &u, &p, Some(&e), None, None).await),
     }
 }

@@ -173,7 +173,7 @@ pub fn edit_project(
     base_url: &str,
     app_slug: Option<&str>,
     versions: &[String],
-    import: Option<&crate::github_app::ImportStatus>,
+    import: Option<&crate::db::ImportJob>,
 ) -> Markup {
     html! {
         section.narrow {
@@ -240,21 +240,12 @@ pub fn edit_project(
                     h3 { "Import history" }
                     p { "Imports the " code { "<version>_report" } " artifacts of past successful runs on the default branch, oldest first, so the history graph starts before you joined. "
                         "GitHub only keeps artifacts for a limited time (90 days by default); for older history, see " a href="/docs/decomp-dev" { "backfilling through the API" } "." }
-                    @match import {
-                        Some(s) if s.running => {
-                            p.notice { "Import running: " (s.runs_done) " of " (s.runs_total) " workflow runs checked, " (s.imported) " reports imported. Reload the page to update." }
-                        }
-                        _ => {
-                            @if let Some(s) = import {
-                                @if let Some(e) = &s.error {
-                                    p.notice.err { "The last import stopped with an error: " (e) }
-                                } @else {
-                                    p.notice.ok { "Last import finished: " (s.runs_done) " workflow runs checked, " (s.imported) " reports imported." }
-                                }
-                            }
-                            form method="post" action={ "/dashboard/p/" (p.id) "/import-history" } {
-                                button.btn.btn-ghost type="submit" { "Import history from GitHub Actions" }
-                            }
+                    @if let Some(job) = import {
+                        (import_job_status(job))
+                    }
+                    @if !import.is_some_and(|j| j.is_active()) {
+                        form method="post" action={ "/dashboard/p/" (p.id) "/import-history" } {
+                            button.btn.btn-ghost type="submit" { "Import history from GitHub Actions" }
                         }
                     }
                 }
@@ -286,9 +277,39 @@ pub fn edit_project(
     }
 }
 
-pub fn admin(projects: &[Project], users: &[User]) -> Markup {
+pub fn admin(projects: &[Project], users: &[User], jobs: &[crate::db::ImportJob]) -> Markup {
     html! {
         h1 { "Admin" }
+        div.panel {
+            h2 { "History imports" }
+            p.muted { "At most " (crate::github_app::MAX_CONCURRENT_IMPORTS) " run at the same time; the rest wait in the queue. Unfinished jobs restart when the server does." }
+            @if jobs.is_empty() {
+                p.muted { "No imports yet." }
+            } @else {
+                table.dash {
+                    thead { tr { th { "Job" } th { "Project" } th { "Status" } th { "Runs" } th { "Imported" } th { "Queued" } th { "Started" } th { "Finished" } } }
+                    tbody {
+                        @for j in jobs {
+                            tr {
+                                td.num { "#" (j.id) }
+                                td { a href={ "/projects/" (j.project_slug) } { (j.project_name) } }
+                                td {
+                                    span.badge.warn[j.status == "failed"] { (j.status) }
+                                    @if j.status == "queued" && j.queue_position > 0 { " " span.muted { "#" (j.queue_position + 1) } }
+                                    @if j.attempts > 1 { " " span.muted.small { "attempt " (j.attempts) } }
+                                    @if let Some(e) = &j.error { br; span.muted.small { (e) } }
+                                }
+                                td.num { (j.runs_done) " / " (j.runs_total) }
+                                td.num { (j.imported) }
+                                td { (time_ago(j.created_at)) }
+                                td { @if let Some(t) = j.started_at { (time_ago(t)) } @else { "—" } }
+                                td { @if let Some(t) = j.finished_at { (time_ago(t)) } @else { "—" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         div.panel {
             h2 { "Projects" }
             table.dash {
@@ -336,6 +357,30 @@ pub fn admin(projects: &[Project], users: &[User]) -> Markup {
                     }
                 }
             }
+        }
+    }
+}
+
+/// One line describing an import job's state, for the project page and the admin list.
+fn import_job_status(job: &crate::db::ImportJob) -> Markup {
+    html! {
+        @match job.status.as_str() {
+            "queued" => p.notice {
+                "Import queued"
+                @if job.queue_position > 0 { ": " (job.queue_position) " job(s) ahead of it" }
+                ". Reload the page to follow it."
+            },
+            "running" => p.notice {
+                "Import running: " (job.runs_done) " of " (job.runs_total) " workflow runs checked, " (job.imported) " reports imported. Reload the page to update."
+            },
+            "failed" => p.notice.err {
+                "The last import failed after " (job.runs_done) " of " (job.runs_total) " workflow runs: " (job.error.as_deref().unwrap_or("unknown error"))
+            },
+            _ => p.notice.ok {
+                "Last import finished: " (job.runs_done) " workflow runs checked, " (job.imported) " reports imported"
+                @if let Some(t) = job.finished_at { ", " (time_ago(t)) }
+                "."
+            },
         }
     }
 }

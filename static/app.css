@@ -164,12 +164,6 @@ section { margin-bottom: 36px; }
 .project-info h1 { margin: 8px 0 6px; font-size: 2.1rem; }
 .links { color: var(--muted); font-size: .9rem; margin: 0 0 10px; word-break: break-word; }
 .desc { margin: 0 0 8px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
-.stat .bar { height: 18px; border-radius: 9px; }
-.stat dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 16px; margin: 12px 0 0; }
-.stat dl div { display: flex; justify-content: space-between; border-bottom: 1px dashed var(--line); padding-bottom: 4px; }
-.stat dt { color: var(--muted); }
-.stat dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
 .treemap-wrap { overflow-x: auto; }
 svg.treemap { width: 100%; min-width: 560px; height: auto; display: block; }
 .t-bg { fill: var(--none); }
@@ -177,8 +171,8 @@ svg.treemap { width: 100%; min-width: 560px; height: auto; display: block; }
 .t-match { fill: var(--matching); }
 .t-nonmatch { fill: var(--nonmatching); }
 .t-data { fill: var(--data); }
-.t-label { fill: #fff; font: 600 12px var(--font); paint-order: stroke; stroke: rgba(0, 0, 0, .55); stroke-width: 3px; pointer-events: none; }
-.t-pct { fill: #fff; font: 11px var(--font); paint-order: stroke; stroke: rgba(0, 0, 0, .55); stroke-width: 3px; pointer-events: none; }
+.t-label { fill: var(--text); font: 600 12px var(--font); paint-order: stroke; stroke: var(--none); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+.t-pct { fill: var(--text); font: 11px var(--font); paint-order: stroke; stroke: var(--none); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .t-head { fill: var(--muted); font: 600 11px var(--font); }
 svg.treemap g:hover rect.t-bg { fill: color-mix(in srgb, var(--none) 75%, #fff); }
 svg.history { width: 100%; height: auto; display: block; }
@@ -199,7 +193,8 @@ table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.area-table, .reports, .dash { display: block; overflow-x: auto; }
+.reports, .dash { width: 100%; }
+.area-table { overflow-x: auto; }
 .area-table table { margin-top: 10px; }
 .reports td.commit { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td.actions { white-space: nowrap; }
@@ -220,7 +215,8 @@ pre.select { user-select: all; white-space: pre-wrap; word-break: break-all; }
   .project-head { grid-template-columns: 1fr; }
   .hero h1, .project-info h1 { font-size: 1.6rem; }
   nav { gap: 12px; font-size: .92rem; }
-  .stat dl { grid-template-columns: 1fr; }
+  /* Wide tables scroll sideways on small screens instead of squeezing. */
+  .reports, .dash { display: block; overflow-x: auto; }
 }
 .commits { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .commits h3 { font-size: .95rem; margin-bottom: 6px; }
@@ -274,3 +270,19 @@ footer.site p { margin: 4px 0; }
   .docs-nav a { white-space: nowrap; }
   .docs-nav a.active { border-left: 0; border-bottom: 2px solid var(--accent); padding-left: 10px; }
 }
+.small { font-size: .82rem; }
+.history-wrap { position: relative; }
+.history-wrap svg { touch-action: pan-y; cursor: crosshair; }
+.h-cursor { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.h-tip { position: absolute; z-index: 5; pointer-events: none; background: var(--bg2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; font-size: .82rem; line-height: 1.5; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); white-space: nowrap; }
+.h-tip strong { display: block; margin-bottom: 2px; }
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.stat-card { display: grid; gap: 8px; align-content: start; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.stat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.stat-head h2 { margin: 0; font-size: 1rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.stat-big { font-size: 2rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat-sub { color: var(--muted); font-size: .85rem; margin-top: -4px; }
+.stat-card .bar { height: 14px; border-radius: 7px; }
+.stat-parts { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .85rem; color: var(--muted); }
+.stat-parts b { color: var(--text); font-variant-numeric: tabular-nums; }

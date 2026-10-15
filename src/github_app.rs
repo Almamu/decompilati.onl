@@ -309,17 +309,6 @@ async fn gh_get<T: serde::de::DeserializeOwned>(state: &AppState, token: &str, u
 
 // ---------------------------------------------------------------- history import
 
-/// Progress of a history import, shown on the project's dashboard page.
-#[derive(Clone, Debug, Default)]
-pub struct ImportStatus {
-    pub running: bool,
-    pub runs_total: usize,
-    pub runs_done: usize,
-    pub imported: usize,
-    pub error: Option<String>,
-    pub finished_at: Option<i64>,
-}
-
 /// The app's installation on a repository, if it's installed there.
 async fn installation_for_repo(state: &AppState, app: &GithubAppConfig, repo: &str) -> anyhow::Result<Option<u64>> {
     #[derive(Deserialize)]
@@ -344,35 +333,73 @@ struct RunList {
     workflow_runs: Vec<WorkflowRun>,
 }
 
-/// Starts importing a project's history from its past workflow runs. Errors if the app isn't
-/// installed on the repository or an import is already running.
-pub async fn start_history_import(state: &AppState, project: db::Project) -> Result<(), String> {
+/// How many history imports may run at the same time; the rest wait in the queue.
+pub const MAX_CONCURRENT_IMPORTS: usize = 10;
+/// A job that keeps getting interrupted (e.g. by restarts) is given up after this many starts.
+const MAX_ATTEMPTS: i64 = 3;
+
+/// Queues an import of a project's history from its past workflow runs. Errors if the app
+/// isn't installed on the repository or an import is already queued or running.
+pub async fn start_history_import(state: &AppState, project: &db::Project, user_id: i64) -> Result<(), String> {
     let app = state.config.github_app.clone().ok_or("The GitHub App isn't configured on this server.")?;
-    if state.imports.lock().get(&project.id).is_some_and(|s| s.running) {
-        return Err("An import is already running for this project.".into());
-    }
-    let installation = installation_for_repo(state, &app, &project.repo)
+    installation_for_repo(state, &app, &project.repo)
         .await
         .map_err(|_| "Couldn't reach GitHub, please try again.".to_string())?
         .ok_or_else(|| format!("Install the GitHub App on {} first.", project.repo))?;
-    state.imports.lock().insert(project.id, ImportStatus { running: true, ..Default::default() });
-    let state = state.clone();
-    tokio::spawn(async move {
-        let id = project.id;
-        let result = import_history(&state, &app, installation, &project).await;
-        let mut imports = state.imports.lock();
-        let status = imports.entry(id).or_default();
-        status.running = false;
-        status.finished_at = Some(crate::util::now());
-        if let Err(e) = result {
-            tracing::warn!(repo = %project.repo, error = %e, "history import failed");
-            status.error = Some(e.to_string());
-        }
-    });
+    let pid = project.id;
+    let job = state
+        .db
+        .run(move |c| db::create_import_job(c, pid, user_id))
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("An import is already queued or running for this project.")?;
+    spawn_job(state.clone(), job, project.id);
     Ok(())
 }
 
-async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u64, project: &db::Project) -> anyhow::Result<()> {
+/// Restarts the jobs a previous run of the server didn't finish. Call once at startup.
+pub async fn resume_import_jobs(state: &AppState) -> anyhow::Result<()> {
+    let jobs = state.db.run(|c| db::unfinished_import_jobs(c)).await?;
+    if !jobs.is_empty() {
+        tracing::info!(count = jobs.len(), "resuming history imports");
+    }
+    for (job, project) in jobs {
+        spawn_job(state.clone(), job, project);
+    }
+    Ok(())
+}
+
+/// Runs a queued job once one of the `MAX_CONCURRENT_IMPORTS` slots is free.
+fn spawn_job(state: AppState, job: i64, project_id: i64) {
+    tokio::spawn(async move {
+        let Ok(_slot) = state.import_slots.clone().acquire_owned().await else { return };
+        let result = run_job(&state, job, project_id).await;
+        let error = result.err().map(|e| e.to_string());
+        if let Some(e) = &error {
+            tracing::warn!(job, project_id, error = %e, "history import failed");
+        }
+        if let Err(e) = state.db.run(move |c| db::finish_import_job(c, job, error.as_deref())).await {
+            tracing::error!(job, error = %e, "couldn't record the end of a history import");
+        }
+    });
+}
+
+async fn run_job(state: &AppState, job: i64, project_id: i64) -> anyhow::Result<()> {
+    let attempts = state.db.run(move |c| db::start_import_job(c, job)).await?;
+    anyhow::ensure!(attempts <= MAX_ATTEMPTS, "gave up after {MAX_ATTEMPTS} interrupted attempts");
+    let app = state.config.github_app.clone().ok_or_else(|| anyhow::anyhow!("the GitHub App isn't configured"))?;
+    let project = state
+        .db
+        .run(move |c| db::project_by_id(c, project_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("the project no longer exists"))?;
+    let installation = installation_for_repo(state, &app, &project.repo)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("the GitHub App isn't installed on {} anymore", project.repo))?;
+    import_history(state, &app, installation, &project, job).await
+}
+
+async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u64, project: &db::Project, job: i64) -> anyhow::Result<()> {
     const MAX_RUNS: usize = 1000;
     let repo = &project.repo;
     let token = installation_token(state, app, installation).await?;
@@ -397,12 +424,15 @@ async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u
         }
     }
     runs.reverse();
-    if let Some(s) = state.imports.lock().get_mut(&project.id) {
-        s.runs_total = runs.len();
-    }
+    let total = runs.len();
+    let progress = |done: usize, imported: usize| async move {
+        let _ = state.db.run(move |c| db::import_job_progress(c, job, total, done, imported)).await;
+    };
+    progress(0, 0).await;
 
+    let mut imported = 0;
     let mut versions_touched = std::collections::BTreeSet::new();
-    for run in runs {
+    for (done, run) in runs.into_iter().enumerate() {
         let at = run.updated_at.as_deref().and_then(crate::util::parse_timestamp);
         let artifacts: ArtifactList = match gh_get(
             state,
@@ -429,22 +459,17 @@ async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u
             let p = project.clone();
             if state.db.run(move |c| db::apply_report(c, &p, &report, at)).await?.is_some() {
                 versions_touched.insert(version);
-                if let Some(s) = state.imports.lock().get_mut(&project.id) {
-                    s.imported += 1;
-                }
+                imported += 1;
             }
         }
-        if let Some(s) = state.imports.lock().get_mut(&project.id) {
-            s.runs_done += 1;
-        }
+        progress(done + 1, imported).await;
     }
     for version in &versions_touched {
         state.cache.invalidate(version_paths(&project.slug, &project.platform, version));
     }
-    tracing::info!(%repo, versions = versions_touched.len(), "history import finished");
+    tracing::info!(%repo, imported, "history import finished");
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

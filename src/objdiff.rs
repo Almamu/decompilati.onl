@@ -65,6 +65,10 @@ impl Measures {
         let fuzzy = ((self.fuzzy_match_percent.clamp(0.0, 100.0) / 100.0) * total as f64).round() as u64;
         CodeStats { total, matching, non_matching: fuzzy.saturating_sub(matching).min(total - matching) }
     }
+    fn functions(&self) -> Option<FunctionStats> {
+        (self.total_functions > 0)
+            .then(|| FunctionStats { total: self.total_functions, matching: self.matched_functions.min(self.total_functions) })
+    }
     fn data(&self) -> DataStats {
         DataStats { total: self.total_data, done: self.matched_data.min(self.total_data) }
     }
@@ -120,6 +124,7 @@ fn area(name: &str, m: &Measures, children: Vec<AreaInput>) -> AreaInput {
         description: None,
         code: Some(m.code()),
         data: Some(m.data()),
+        functions: m.functions(),
         weight: None,
         children,
     }
@@ -176,10 +181,7 @@ impl Report {
             unit: Some("bytes".into()),
             code: Some(self.measures.code()),
             data: Some(self.measures.data()),
-            functions: (self.measures.total_functions > 0).then(|| FunctionStats {
-                total: self.measures.total_functions,
-                matching: self.measures.matched_functions.min(self.measures.total_functions),
-            }),
+            functions: self.measures.functions(),
             areas,
             layout: None,
             commit,

@@ -17,6 +17,7 @@ use crate::{
 pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_votes: bool, versions: &[String], active: &str) -> Markup {
     let plat = platforms::get_or_other(&p.platform);
     let areas = p.areas();
+    let with_functions = any_functions(&areas);
     html! {
         @if hidden_by_votes || p.hidden {
             div.notice { "This project is hidden from listings because of its community rating or moderation." }
@@ -53,27 +54,45 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
         }
 
         section.panel {
-            div.stats {
-                div.stat {
-                    h2 { "Code" }
+            div.stat-cards {
+                div.stat-card {
+                    div.stat-head {
+                        h2 { "Code" }
+                        span.stat-big { (fmt_pct(p.code.decompiled_pct())) }
+                    }
+                    span.stat-sub { "decompiled of " (fmt_count(p.code.total)) " " (p.unit) }
                     (code_bar(&p.code))
-                    dl {
-                        div { dt { span.sw.matching {} "Matching" } dd { (fmt_pct(p.code.matching_pct())) } }
-                        div { dt { span.sw.nonmatching {} "Non-matching" } dd { (fmt_pct(p.code.non_matching_pct())) } }
-                        div { dt { span.sw.none {} "Not decompiled" } dd { (fmt_pct(100.0 - p.code.decompiled_pct())) } }
-                        div { dt { "Total" } dd { (fmt_count(p.code.total)) " " (p.unit) } }
-                        @if p.functions.total > 0 {
-                            div { dt { "Functions" } dd { (fmt_count(p.functions.matching)) " / " (fmt_count(p.functions.total)) } }
-                        }
+                    ul.stat-parts {
+                        li { span.sw.matching {} b { (fmt_pct(p.code.matching_pct())) } " matching" }
+                        li { span.sw.nonmatching {} b { (fmt_pct(p.code.non_matching_pct())) } " non-matching" }
+                        li { span.sw.none {} b { (fmt_pct(100.0 - p.code.decompiled_pct())) } " to do" }
                     }
                 }
                 @if p.data.total > 0 {
-                    div.stat {
-                        h2 { "Data" }
+                    div.stat-card {
+                        div.stat-head {
+                            h2 { "Data" }
+                            span.stat-big { (fmt_pct(p.data.pct())) }
+                        }
+                        span.stat-sub { "decompiled of " (fmt_count(p.data.total)) " " (p.unit) }
                         (data_bar(&p.data))
-                        dl {
-                            div { dt { span.sw.data {} "Decompiled" } dd { (fmt_pct(p.data.pct())) } }
-                            div { dt { "Total" } dd { (fmt_count(p.data.total)) " " (p.unit) } }
+                        ul.stat-parts {
+                            li { span.sw.data {} b { (fmt_count(p.data.done)) } " done" }
+                            li { span.sw.none {} b { (fmt_count(p.data.total - p.data.done)) } " to do" }
+                        }
+                    }
+                }
+                @if p.functions.total > 0 {
+                    div.stat-card {
+                        div.stat-head {
+                            h2 { "Functions" }
+                            span.stat-big { (fmt_pct(p.functions.pct())) }
+                        }
+                        span.stat-sub { "matching of " (fmt_count(p.functions.total)) " functions" }
+                        (functions_bar(&p.functions))
+                        ul.stat-parts {
+                            li { span.sw.matching {} b { (fmt_count(p.functions.matching)) } " matching" }
+                            li { span.sw.none {} b { (fmt_count(p.functions.total - p.functions.matching)) } " to do" }
                         }
                     }
                 }
@@ -93,8 +112,8 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 details.area-table {
                     summary { "All areas as a table" }
                     table {
-                        thead { tr { th { "Area" } th { "Matching" } th { "Non-matching" } th { "Data" } th.num { "Size (" (p.unit) ")" } } }
-                        tbody { @for a in &areas { (area_rows(a, 0)) } }
+                        thead { tr { th { "Area" } th { "Matching" } th { "Non-matching" } th { "Data" } @if with_functions { th.num { "Functions" } } th.num { "Size (" (p.unit) ")" } } }
+                        tbody { @for a in &areas { (area_rows(a, 0, with_functions)) } }
                     }
                 }
             }
@@ -164,6 +183,9 @@ fn area_tile(a: &Area) -> Markup {
             div.area-name { (a.name) span.pval { (fmt_pct(a.code.decompiled_pct())) } }
             (code_bar(&a.code))
             @if a.data.total > 0 { (data_bar(&a.data)) }
+            @if a.functions.total > 0 {
+                div.muted.small { (fmt_count(a.functions.matching)) " / " (fmt_count(a.functions.total)) " functions matching" }
+            }
             @if !a.children.is_empty() {
                 ul.area-children {
                     @for c in &a.children {
@@ -175,17 +197,24 @@ fn area_tile(a: &Area) -> Markup {
     }
 }
 
-fn area_rows(a: &Area, depth: usize) -> Markup {
+fn area_rows(a: &Area, depth: usize, with_functions: bool) -> Markup {
     html! {
         tr {
             td style={ "padding-left:" (0.5 + depth as f64 * 1.2) "em" } { (a.name) }
             td { (fmt_pct(a.code.matching_pct())) }
             td { (fmt_pct(a.code.non_matching_pct())) }
             td { @if a.data.total > 0 { (fmt_pct(a.data.pct())) } @else { "—" } }
+            @if with_functions {
+                td.num { @if a.functions.total > 0 { (fmt_count(a.functions.matching)) " / " (fmt_count(a.functions.total)) } @else { "—" } }
+            }
             td.num { (fmt_count(a.code.total)) }
         }
-        @for c in &a.children { (area_rows(c, depth + 1)) }
+        @for c in &a.children { (area_rows(c, depth + 1, with_functions)) }
     }
+}
+
+fn any_functions(areas: &[Area]) -> bool {
+    areas.iter().any(|a| a.functions.total > 0 || any_functions(&a.children))
 }
 
 /// Commits fetched from GitHub after the last progress report.
@@ -235,4 +264,13 @@ fn badge_list(p: &Project) -> Vec<(String, &'static str)> {
         list.push((format!("/badge/{}/functions.svg", p.slug), "Functions"));
     }
     list
+}
+
+fn functions_bar(f: &crate::report::FunctionStats) -> Markup {
+    let v = f.pct();
+    html! {
+        div.bar role="img" aria-label={ "Functions: " (fmt_pct(v)) " matching" } {
+            span.seg.matching style={ "width:" (format!("{v:.3}")) "%" } {}
+        }
+    }
 }
