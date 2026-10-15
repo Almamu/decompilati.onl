@@ -56,6 +56,9 @@ pub fn pct(part: u64, total: u64) -> f64 {
 /// Body of `POST /api/v1/progress`.
 #[derive(Debug, Deserialize)]
 pub struct ReportInput {
+    /// Game version this report is for (e.g. `us`, `europe`); empty for single-version projects.
+    #[serde(default)]
+    pub version: Option<String>,
     pub unit: Option<String>,
     pub code: Option<CodeStats>,
     pub data: Option<DataStats>,
@@ -120,6 +123,7 @@ impl Layout {
 
 #[derive(Debug, Clone)]
 pub struct Report {
+    pub version: String,
     pub unit: String,
     pub code: CodeStats,
     pub data: DataStats,
@@ -209,7 +213,12 @@ impl ReportInput {
         check_code(&code, "code")?;
         check_data(&data, "data")?;
         let unit = self.unit.map(|u| clean_text(&u, 16)).filter(|u| !u.is_empty()).unwrap_or_else(|| "bytes".into());
+        let version = self.version.map(|v| v.trim().to_string()).unwrap_or_default();
+        if !valid_version(&version) {
+            return Err("version must be up to 32 letters, digits, dots, dashes or underscores".into());
+        }
         Ok(Report {
+            version,
             unit,
             code,
             data,
@@ -251,4 +260,9 @@ mod tests {
         let input: ReportInput = serde_json::from_str(r#"{}"#).unwrap();
         assert!(input.normalize().is_err());
     }
+}
+
+/// Version names come from artifact names like `europe_report`, so they stay simple.
+pub fn valid_version(v: &str) -> bool {
+    v.len() <= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }

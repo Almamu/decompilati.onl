@@ -168,6 +168,7 @@ impl Report {
             vec![]
         };
         ReportInput {
+            version: None,
             unit: Some("bytes".into()),
             code: Some(self.measures.code()),
             data: Some(self.measures.data()),

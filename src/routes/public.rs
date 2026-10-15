@@ -143,44 +143,84 @@ async fn load_public_project(state: &AppState, slug: String) -> AppResult<Projec
 }
 
 pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
-    cached(&state, &headers, format!("/projects/{slug}"), || async {
-        let p = load_public_project(&state, slug).await?;
-        let pid = p.id;
-        let (reports, owner_banned) = state
-            .db
-            .run(move |c| {
-                let banned: bool = c.query_row(
-                    "SELECT u.is_banned FROM users u JOIN projects p ON p.owner_id = u.id WHERE p.id = ?1",
-                    [pid],
-                    |r| r.get(0),
-                )?;
-                Ok((db::reports_for_project(c, pid, 500)?, banned))
-            })
-            .await?;
-        if owner_banned {
-            return Err(AppError::NotFound);
-        }
-        let desc = format!(
-            "{} decompilation: {} code decompiled ({} matching).",
-            p.name,
-            crate::util::fmt_pct(p.code.decompiled_pct()),
-            crate::util::fmt_pct(p.code.matching_pct())
-        );
-        let hidden = !is_visible(&p, state.config.hide_threshold);
-        let html = views::layout::render(Page {
-            title: &p.name,
-            description: &desc,
-            image: og_image(&state, &p),
-            body: views::project::project(&p, &reports, &state.config.base_url, hidden),
-        });
-        Ok(CachedPage::new(html, HTML))
-    })
-    .await
+    let key = format!("/projects/{slug}");
+    cached(&state, &headers, key, || render_project(&state, slug, None)).await
+}
+
+pub async fn project_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, version)): Path<(String, String)>,
+) -> AppResult<Response> {
+    if !crate::report::valid_version(&version) || version.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    let key = format!("/projects/{slug}/versions/{version}");
+    cached(&state, &headers, key, || render_project(&state, slug, Some(version))).await
+}
+
+/// A project page for one version (`None`: the default version).
+async fn render_project(state: &AppState, slug: String, version: Option<String>) -> AppResult<Arc<CachedPage>> {
+    let p = load_public_project(state, slug).await?;
+    let pid = p.id;
+    let active = version.unwrap_or_else(|| p.default_version.clone());
+    let v = active.clone();
+    let (reports, versions, owner_banned) = state
+        .db
+        .run(move |c| {
+            let banned: bool = c.query_row(
+                "SELECT u.is_banned FROM users u JOIN projects p ON p.owner_id = u.id WHERE p.id = ?1",
+                [pid],
+                |r| r.get(0),
+            )?;
+            Ok((db::reports_for_project(c, pid, &v, 500)?, db::versions_for_project(c, pid)?, banned))
+        })
+        .await?;
+    if owner_banned {
+        return Err(AppError::NotFound);
+    }
+    // Show the requested version's progress; the default version is already in `p`.
+    let shown = match versions.iter().find(|v| v.version == active) {
+        Some(v) => v.apply_to(&p),
+        None if active == p.default_version => p.clone(),
+        None => return Err(AppError::NotFound),
+    };
+    let names: Vec<String> = versions.iter().map(|v| v.version.clone()).collect();
+    let title = if active != p.default_version { format!("{} ({active})", p.name) } else { p.name.clone() };
+    let desc = format!(
+        "{title} decompilation: {} code decompiled ({} matching).",
+        crate::util::fmt_pct(shown.code.decompiled_pct()),
+        crate::util::fmt_pct(shown.code.matching_pct())
+    );
+    let hidden = !is_visible(&p, state.config.hide_threshold);
+    let html = views::layout::render(Page {
+        title: &title,
+        description: &desc,
+        image: og_image(state, &p),
+        body: views::project::project(&shown, &reports, &state.config.base_url, hidden, &names, &active),
+    });
+    Ok(CachedPage::new(html, HTML))
 }
 
 pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
     cached(&state, &headers, format!("/projects/{slug}/progress.json"), || async {
         let p = load_public_project(&state, slug).await?;
+        let pid = p.id;
+        let versions = state.db.run(move |c| db::versions_for_project(c, pid)).await?;
+        let versions: serde_json::Map<String, serde_json::Value> = versions
+            .iter()
+            .map(|v| {
+                (v.version.clone(), serde_json::json!({
+                    "code": v.code,
+                    "data": v.data,
+                    "code_matching_pct": v.code.matching_pct(),
+                    "code_decompiled_pct": v.code.decompiled_pct(),
+                    "data_pct": v.data.pct(),
+                    "last_report_at": v.last_report_at.map(crate::util::iso_time),
+                    "last_commit": v.last_commit,
+                }))
+            })
+            .collect();
         let body = serde_json::json!({
             "slug": p.slug,
             "name": p.name,
@@ -199,6 +239,8 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "last_message": p.last_message,
             "updated_at": crate::util::iso_time(p.updated_at),
             "score": p.score(),
+            "default_version": p.default_version,
+            "versions": versions,
         });
         Ok(CachedPage::new(serde_json::to_vec(&body)?, "application/json"))
     })

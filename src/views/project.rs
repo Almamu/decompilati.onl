@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_votes: bool) -> Markup {
+pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_votes: bool, versions: &[String], active: &str) -> Markup {
     let plat = platforms::get_or_other(&p.platform);
     let areas = p.areas();
     html! {
@@ -36,6 +36,19 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 }
                 @if !p.description.is_empty() { p.desc.pre { (p.description) } }
                 (vote(p))
+            }
+        }
+
+        @if versions.len() > 1 {
+            nav.versions aria-label="Game versions" {
+                span.muted { "Version:" }
+                @for v in versions {
+                    @let href = if *v == p.default_version { format!("/projects/{}", p.slug) } else { format!("/projects/{}/versions/{}", p.slug, v) };
+                    a.vtab.active[v == active] href=(href) {
+                        @if v.is_empty() { "(unnamed)" } @else { (v) }
+                        @if *v == p.default_version { span.muted { " ★" } }
+                    }
+                }
             }
         }
 

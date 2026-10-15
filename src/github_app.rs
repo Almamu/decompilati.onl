@@ -18,7 +18,7 @@ use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 
-use crate::{app::AppState, cache::project_paths, db, objdiff};
+use crate::{app::AppState, cache::version_paths, db, objdiff};
 
 const MAX_ARTIFACT: u64 = 64 * 1024 * 1024;
 const MAX_REPORT: u64 = 128 * 1024 * 1024;
@@ -197,21 +197,45 @@ async fn try_import_run(state: &AppState, app: &GithubAppConfig, installation: u
         .json()
         .await?;
     // decomp.dev's convention: one `<version>_report` artifact per game version.
-    let mut reports: Vec<&Artifact> = list
+    let mut reports: Vec<(String, &Artifact)> = list
         .artifacts
         .iter()
-        .filter(|a| !a.expired && (a.name.ends_with("_report") || a.name == "report"))
+        .filter(|a| !a.expired)
+        .filter_map(|a| {
+            let version = if a.name == "report" { Some("") } else { a.name.strip_suffix("_report") }?;
+            crate::report::valid_version(version).then(|| (version.to_string(), a))
+        })
         .collect();
-    reports.sort_by(|a, b| a.name.cmp(&b.name));
-    let Some(artifact) = reports.first() else {
+    reports.sort_by(|a, b| a.0.cmp(&b.0));
+    if reports.is_empty() {
         tracing::info!(%repo, run = run.id, "workflow run has no *_report artifact");
         return Ok(());
-    };
-    anyhow::ensure!(artifact.size_in_bytes <= MAX_ARTIFACT, "artifact {} is too large", artifact.name);
+    }
+    let message = run.head_commit.as_ref().map(|c| c.message.clone());
+    for (version, artifact) in reports {
+        if let Err(e) = import_artifact(state, &token, repo, &run.head_sha, message.clone(), &version, artifact, &projects).await {
+            tracing::warn!(%repo, artifact = %artifact.name, error = %e, "couldn't import report artifact");
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn import_artifact(
+    state: &AppState,
+    token: &str,
+    repo: &str,
+    head_sha: &str,
+    message: Option<String>,
+    version: &str,
+    artifact: &Artifact,
+    projects: &[db::Project],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(artifact.size_in_bytes <= MAX_ARTIFACT, "artifact is too large");
     let zip_bytes = state
         .http
         .get(&artifact.archive_download_url)
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await?
@@ -220,13 +244,13 @@ async fn try_import_run(state: &AppState, app: &GithubAppConfig, installation: u
         .await?;
     anyhow::ensure!((zip_bytes.len() as u64) <= MAX_ARTIFACT, "artifact is too large");
 
-    let message = run.head_commit.map(|c| c.message);
-    let commit = run.head_sha.clone();
+    let (commit, v) = (head_sha.to_string(), version.to_string());
     let report = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let json = read_report(&zip_bytes)?;
         let r: objdiff::Report = serde_json::from_slice(&json)?;
         let mut input = r.into_input(Some(commit), message);
         input.layout = Some("treemap".into());
+        input.version = Some(v);
         input.normalize().map_err(anyhow::Error::msg)
     })
     .await??;
@@ -236,11 +260,17 @@ async fn try_import_run(state: &AppState, app: &GithubAppConfig, installation: u
             continue;
         }
         let (p, r) = (project.clone(), report.clone());
-        let changed = state.db.run(move |c| db::apply_report(c, &p, &r)).await?;
-        tracing::info!(%repo, project = %project.slug, artifact = %artifact.name, changed, "imported report from workflow run");
-        if changed {
-            state.cache.invalidate(project_paths(&project.slug, &project.platform));
-            crate::github::spawn_commit_fetch(state.clone(), project, Some(run.head_sha.clone()));
+        let applied = state.db.run(move |c| db::apply_report(c, &p, &r)).await?;
+        tracing::info!(%repo, project = %project.slug, %version, changed = applied.is_some(), "imported report from workflow run");
+        if let Some(applied) = applied {
+            state.cache.invalidate(version_paths(&project.slug, &project.platform, version));
+            crate::github::spawn_commit_fetch(
+                state.clone(),
+                project.clone(),
+                version.to_string(),
+                applied.prev_commit,
+                Some(head_sha.to_string()),
+            );
         }
     }
     Ok(())

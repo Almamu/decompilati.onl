@@ -21,6 +21,9 @@ pub struct ProjectForm {
     pub website: String,
     #[serde(default)]
     pub description: String,
+    /// Version shown on cards and listings (edit form only, when several have reported).
+    #[serde(default)]
+    pub default_version: Option<String>,
     /// Checkbox: present ("on") when ticked.
     pub ai_generated: Option<String>,
 }
@@ -34,6 +37,7 @@ impl ProjectForm {
             website: p.website.clone().unwrap_or_default(),
             description: p.description.clone(),
             ai_generated: p.ai_generated.then(|| "on".into()),
+            default_version: Some(p.default_version.clone()),
         }
     }
 }
@@ -167,6 +171,7 @@ pub fn edit_project(
     new_key: Option<&str>,
     base_url: &str,
     app_slug: Option<&str>,
+    versions: &[String],
 ) -> Markup {
     html! {
         section.narrow {
@@ -188,6 +193,17 @@ pub fn edit_project(
                 p.muted { "Public URL: " a href={ "/projects/" (p.slug) } { (base_url) "/projects/" (p.slug) } }
                 form.form method="post" action={ "/dashboard/p/" (p.id) } {
                     (form_fields(f, repos))
+                    @if versions.len() > 1 {
+                        label { "Default version " span.muted { "(shown on the homepage, listings and the badge)" }
+                            select name="default_version" {
+                                @for v in versions {
+                                    option value=(v) selected[f.default_version.as_deref() == Some(v.as_str())] {
+                                        @if v.is_empty() { "(unnamed)" } @else { (v) }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     button.btn type="submit" { "Save changes" }
                 }
             }

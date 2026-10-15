@@ -196,7 +196,14 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
 
 async fn edit_form_page(state: &AppState, u: &SessionUser, p: &Project, f: &ProjectForm, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {
     let repos = repo_options(state, u, &format!("/dashboard/p/{}", p.id)).await;
-    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, state.config.github_app.as_ref().map(|a| a.slug.as_str())))
+    let pid = p.id;
+    let versions: Vec<String> = state
+        .db
+        .run(move |c| Ok(db::versions_for_project(c, pid)?.into_iter().map(|v| v.version).collect()))
+        .await
+        .unwrap_or_default();
+    let app_slug = state.config.github_app.as_ref().map(|a| a.slug.as_str());
+    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, app_slug, &versions))
 }
 
 async fn edit_page(state: &AppState, u: &SessionUser, p: &Project, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {
@@ -224,17 +231,24 @@ pub async fn update(State(state): State<AppState>, RequireUser(u): RequireUser, 
         Err(e) => return Ok(edit_form_page(&state, &u, &p, &f, Some(&e), None, None).await),
     };
     let m = meta.clone();
-    let updated = state
+    let new_default = f.default_version.clone().filter(|v| *v != p.default_version);
+    let (updated, versions) = state
         .db
         .run(move |c| {
             db::update_project_meta(c, id, &m)?;
-            db::project_by_id(c, id)
+            let versions: Vec<String> = db::versions_for_project(c, id)?.into_iter().map(|v| v.version).collect();
+            if let Some(v) = new_default.filter(|v| versions.contains(v)) {
+                db::set_default_version(c, id, &v)?;
+            }
+            Ok((db::project_by_id(c, id)?, versions))
         })
-        .await?
-        .ok_or(AppError::NotFound)?;
-    // The platform may have changed, so both the old and new listing pages are affected.
+        .await?;
+    let updated = updated.ok_or(AppError::NotFound)?;
+    // The platform may have changed, so both the old and new listing pages are affected; the
+    // version pages show which version is the default.
     state.cache.invalidate(membership_paths(&p.slug, &p.platform));
     state.cache.invalidate(membership_paths(&updated.slug, &updated.platform));
+    state.cache.invalidate(versions.iter().filter(|v| !v.is_empty()).map(|v| format!("/projects/{}/versions/{v}", updated.slug)));
     Ok(edit_page(&state, &u, &updated, None, Some("Saved."), None).await)
 }
 

@@ -188,3 +188,12 @@ pub fn membership_paths(slug: &str, platform: &str) -> Vec<String> {
     paths.extend(crate::platforms::PLATFORMS.iter().map(|p| format!("/platform/{}", p.slug)));
     paths
 }
+
+/// `project_paths` plus the page of the given version (named versions have their own page).
+pub fn version_paths(slug: &str, platform: &str, version: &str) -> Vec<String> {
+    let mut paths = project_paths(slug, platform);
+    if !version.is_empty() {
+        paths.push(format!("/projects/{slug}/versions/{version}"));
+    }
+    paths
+}

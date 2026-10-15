@@ -80,6 +80,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
                 })
                 .collect();
             let report = ReportInput {
+                version: None,
                 unit: Some("bytes".into()),
                 code: None,
                 data: None,

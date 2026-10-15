@@ -96,6 +96,38 @@ CREATE TABLE votes (
 CREATE INDEX votes_project ON votes(project_id);
 "#, r#"
 ALTER TABLE projects ADD COLUMN commits_json TEXT NOT NULL DEFAULT '{}';
+"#, r#"
+CREATE TABLE project_versions (
+    project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    version         TEXT NOT NULL,
+    unit            TEXT NOT NULL DEFAULT 'bytes',
+    layout          TEXT NOT NULL DEFAULT 'treemap',
+    code_total      INTEGER NOT NULL DEFAULT 0,
+    code_matching   INTEGER NOT NULL DEFAULT 0,
+    code_nonmatching INTEGER NOT NULL DEFAULT 0,
+    data_total      INTEGER NOT NULL DEFAULT 0,
+    data_done       INTEGER NOT NULL DEFAULT 0,
+    prev_code_total      INTEGER NOT NULL DEFAULT 0,
+    prev_code_matching   INTEGER NOT NULL DEFAULT 0,
+    prev_code_nonmatching INTEGER NOT NULL DEFAULT 0,
+    prev_data_total      INTEGER NOT NULL DEFAULT 0,
+    prev_data_done       INTEGER NOT NULL DEFAULT 0,
+    areas_json      TEXT NOT NULL DEFAULT '[]',
+    last_report_at  INTEGER,
+    last_commit     TEXT,
+    last_message    TEXT,
+    commits_json    TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (project_id, version)
+) WITHOUT ROWID;
+ALTER TABLE reports ADD COLUMN version TEXT NOT NULL DEFAULT '';
+CREATE INDEX reports_project_version_time ON reports(project_id, version, created_at);
+ALTER TABLE projects ADD COLUMN default_version TEXT NOT NULL DEFAULT '';
+-- Existing progress becomes the unnamed version.
+INSERT INTO project_versions
+    SELECT id, '', unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
+           prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
+           areas_json, last_report_at, last_commit, last_message, commits_json
+    FROM projects WHERE last_report_at IS NOT NULL;
 "#];
 
 #[derive(Debug, Clone)]
@@ -141,6 +173,8 @@ pub struct Project {
     pub updated_at: i64,
     /// Recent commits fetched from GitHub after the last report (see `github::CommitList`).
     pub commits_json: String,
+    /// The version shown on cards and listings; its progress is mirrored into this row.
+    pub default_version: String,
 }
 
 impl Project {
@@ -178,7 +212,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
-    p.commits_json";
+    p.commits_json, p.default_version";
 
 fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -211,6 +245,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         created_at: r.get(32)?,
         updated_at: r.get(33)?,
         commits_json: r.get(34)?,
+        default_version: r.get(35)?,
     })
 }
 
@@ -417,49 +452,176 @@ pub fn set_hidden(c: &Conn, id: i64, on: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Store a new report. Returns `false` if nothing changed compared to the current state
-/// (in which case nothing is written and no cache needs purging).
-pub fn apply_report(c: &mut Conn, project: &Project, r: &Report) -> anyhow::Result<bool> {
-    let areas_json = serde_json::to_string(&r.areas)?;
-    let unchanged = project.code == r.code
-        && project.data == r.data
-        && project.areas_json == areas_json
-        && project.unit == r.unit
-        && project.layout == r.layout;
-    if unchanged {
-        return Ok(false);
+/// Progress of one game version of a project.
+#[derive(Debug, Clone)]
+pub struct VersionState {
+    pub version: String,
+    pub unit: String,
+    pub layout: Layout,
+    pub code: CodeStats,
+    pub data: DataStats,
+    pub prev_code: CodeStats,
+    pub prev_data: DataStats,
+    pub areas_json: String,
+    pub last_report_at: Option<i64>,
+    pub last_commit: Option<String>,
+    pub last_message: Option<String>,
+    pub commits_json: String,
+}
+
+impl VersionState {
+    /// The project with this version's progress in place of the default version's.
+    pub fn apply_to(&self, p: &Project) -> Project {
+        Project {
+            unit: self.unit.clone(),
+            layout: self.layout,
+            code: self.code,
+            data: self.data,
+            prev_code: self.prev_code,
+            prev_data: self.prev_data,
+            areas_json: self.areas_json.clone(),
+            last_report_at: self.last_report_at,
+            last_commit: self.last_commit.clone(),
+            last_message: self.last_message.clone(),
+            commits_json: self.commits_json.clone(),
+            ..p.clone()
+        }
     }
+}
+
+const VERSION_COLS: &str = "version, unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
+    prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
+    areas_json, last_report_at, last_commit, last_message, commits_json";
+
+fn version_from_row(r: &Row) -> rusqlite::Result<VersionState> {
+    Ok(VersionState {
+        version: r.get(0)?,
+        unit: r.get(1)?,
+        layout: Layout::parse(&r.get::<_, String>(2)?),
+        code: CodeStats { total: r.get(3)?, matching: r.get(4)?, non_matching: r.get(5)? },
+        data: DataStats { total: r.get(6)?, done: r.get(7)? },
+        prev_code: CodeStats { total: r.get(8)?, matching: r.get(9)?, non_matching: r.get(10)? },
+        prev_data: DataStats { total: r.get(11)?, done: r.get(12)? },
+        areas_json: r.get(13)?,
+        last_report_at: r.get(14)?,
+        last_commit: r.get(15)?,
+        last_message: r.get(16)?,
+        commits_json: r.get(17)?,
+    })
+}
+
+/// All versions of a project that have reported progress, by name.
+pub fn versions_for_project(c: &Conn, project_id: i64) -> anyhow::Result<Vec<VersionState>> {
+    let sql = format!("SELECT {VERSION_COLS} FROM project_versions WHERE project_id = ?1 ORDER BY version");
+    let mut st = c.prepare_cached(&sql)?;
+    let rows = st.query_map([project_id], version_from_row)?.collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+fn version_state(c: &Conn, project_id: i64, version: &str) -> anyhow::Result<Option<VersionState>> {
+    let sql = format!("SELECT {VERSION_COLS} FROM project_versions WHERE project_id = ?1 AND version = ?2");
+    Ok(c.query_row(&sql, params![project_id, version], version_from_row).optional()?)
+}
+
+/// Copies a version's progress into the project row, which listings and cards read.
+fn mirror_version(c: &Connection, project_id: i64, version: &str) -> anyhow::Result<()> {
+    c.execute(
+        "UPDATE projects SET (unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
+                prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
+                areas_json, last_report_at, last_commit, last_message, commits_json) =
+            (SELECT unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
+                prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
+                areas_json, last_report_at, last_commit, last_message, commits_json
+             FROM project_versions v WHERE v.project_id = projects.id AND v.version = ?2)
+         WHERE id = ?1 AND EXISTS (SELECT 1 FROM project_versions WHERE project_id = ?1 AND version = ?2)",
+        params![project_id, version],
+    )?;
+    Ok(())
+}
+
+/// Makes `version` the one shown on cards and listings.
+pub fn set_default_version(c: &mut Conn, project_id: i64, version: &str) -> anyhow::Result<()> {
+    let tx = c.transaction()?;
+    tx.execute("UPDATE projects SET default_version = ?2 WHERE id = ?1", params![project_id, version])?;
+    mirror_version(&tx, project_id, version)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Result of storing a report that changed something.
+pub struct Applied {
+    /// The commit of the version's previous report, to list the commits in between.
+    pub prev_commit: Option<String>,
+}
+
+/// Stores a new report for its version. Returns `None` if nothing changed compared to that
+/// version's current state (in which case nothing is written and no cache needs purging).
+/// The first version a project reports becomes its default.
+pub fn apply_report(c: &mut Conn, project: &Project, r: &Report) -> anyhow::Result<Option<Applied>> {
+    let version = r.version.as_str();
+    let areas_json = serde_json::to_string(&r.areas)?;
+    let current = version_state(c, project.id, version)?;
+    if let Some(v) = &current {
+        if v.code == r.code && v.data == r.data && v.areas_json == areas_json && v.unit == r.unit && v.layout == r.layout {
+            return Ok(None);
+        }
+    }
+    let prev_commit = current.as_ref().and_then(|v| v.last_commit.clone());
+    let prev = current.map(|v| (v.code, v.data)).unwrap_or_default();
     let t = now();
     let tx = c.transaction()?;
     tx.execute(
-        "UPDATE projects SET
-            prev_code_total = code_total, prev_code_matching = code_matching, prev_code_nonmatching = code_nonmatching,
-            prev_data_total = data_total, prev_data_done = data_done,
-            code_total = ?2, code_matching = ?3, code_nonmatching = ?4, data_total = ?5, data_done = ?6,
-            unit = ?7, layout = ?8, areas_json = ?9, last_report_at = ?10, last_commit = ?11, last_message = ?12,
-            commits_json = '{}'
-         WHERE id = ?1",
+        "INSERT INTO project_versions (project_id, version, unit, layout, code_total, code_matching, code_nonmatching,
+                data_total, data_done, prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total,
+                prev_data_done, areas_json, last_report_at, last_commit, last_message, commits_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, '{}')
+         ON CONFLICT(project_id, version) DO UPDATE SET
+            unit = excluded.unit, layout = excluded.layout, code_total = excluded.code_total,
+            code_matching = excluded.code_matching, code_nonmatching = excluded.code_nonmatching,
+            data_total = excluded.data_total, data_done = excluded.data_done,
+            prev_code_total = excluded.prev_code_total, prev_code_matching = excluded.prev_code_matching,
+            prev_code_nonmatching = excluded.prev_code_nonmatching, prev_data_total = excluded.prev_data_total,
+            prev_data_done = excluded.prev_data_done, areas_json = excluded.areas_json,
+            last_report_at = excluded.last_report_at, last_commit = excluded.last_commit,
+            last_message = excluded.last_message, commits_json = '{}'",
         params![
-            project.id, r.code.total, r.code.matching, r.code.non_matching, r.data.total, r.data.done,
-            r.unit, r.layout.as_str(), areas_json, t, r.commit, r.message
+            project.id, version, r.unit, r.layout.as_str(), r.code.total, r.code.matching, r.code.non_matching,
+            r.data.total, r.data.done, prev.0.total, prev.0.matching, prev.0.non_matching, prev.1.total, prev.1.done,
+            areas_json, t, r.commit, r.message
         ],
     )?;
     tx.execute(
-        "INSERT INTO reports (project_id, created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![project.id, t, r.code.total, r.code.matching, r.code.non_matching, r.data.total, r.data.done, r.commit, r.message],
+        "INSERT INTO reports (project_id, version, created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![project.id, version, t, r.code.total, r.code.matching, r.code.non_matching, r.data.total, r.data.done, r.commit, r.message],
     )?;
+    // Fall back to this version as the default if the current default has never reported.
+    let default: String = tx.query_row("SELECT default_version FROM projects WHERE id = ?1", [project.id], |r| r.get(0))?;
+    let default_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM project_versions WHERE project_id = ?1 AND version = ?2)",
+        params![project.id, default],
+        |r| r.get(0),
+    )?;
+    let default = if default_exists {
+        default
+    } else {
+        tx.execute("UPDATE projects SET default_version = ?2 WHERE id = ?1", params![project.id, version])?;
+        version.to_string()
+    };
+    if default == version {
+        mirror_version(&tx, project.id, version)?;
+    }
     tx.commit()?;
-    Ok(true)
+    Ok(Some(Applied { prev_commit }))
 }
 
-pub fn reports_for_project(c: &Conn, project_id: i64, limit: usize) -> anyhow::Result<Vec<ReportRow>> {
+pub fn reports_for_project(c: &Conn, project_id: i64, version: &str, limit: usize) -> anyhow::Result<Vec<ReportRow>> {
     let mut st = c.prepare_cached(
         "SELECT created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message
-         FROM reports WHERE project_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+         FROM reports WHERE project_id = ?1 AND version = ?2 ORDER BY created_at DESC LIMIT ?3",
     )?;
     let mut rows: Vec<ReportRow> = st
-        .query_map(params![project_id, limit as i64], |r| {
+        .query_map(params![project_id, version, limit as i64], |r| {
             Ok(ReportRow {
                 created_at: r.get(0)?,
                 code: CodeStats { total: r.get(1)?, matching: r.get(2)?, non_matching: r.get(3)? },
@@ -473,14 +635,16 @@ pub fn reports_for_project(c: &Conn, project_id: i64, limit: usize) -> anyhow::R
     Ok(rows)
 }
 
-/// For every project, the code stats it had at `since` (the latest report at or before it,
-/// or its first report if it was created afterwards). Used for "most progress".
+/// For every project, the code stats its default version had at `since` (the latest report
+/// at or before it, or its first report if it was created afterwards). Used for "most progress".
 pub fn baselines_since(c: &Conn, since: i64) -> anyhow::Result<Vec<(i64, CodeStats)>> {
     let mut st = c.prepare_cached(
         "SELECT p.id,
             COALESCE(
-              (SELECT r.id FROM reports r WHERE r.project_id = p.id AND r.created_at <= ?1 ORDER BY r.created_at DESC LIMIT 1),
-              (SELECT r.id FROM reports r WHERE r.project_id = p.id ORDER BY r.created_at ASC LIMIT 1)
+              (SELECT r.id FROM reports r WHERE r.project_id = p.id AND r.version = p.default_version
+                 AND r.created_at <= ?1 ORDER BY r.created_at DESC LIMIT 1),
+              (SELECT r.id FROM reports r WHERE r.project_id = p.id AND r.version = p.default_version
+                 ORDER BY r.created_at ASC LIMIT 1)
             ) AS rid
          FROM projects p WHERE p.last_report_at >= ?1",
     )?;
@@ -531,12 +695,24 @@ pub fn public_projects_owned(c: &mut Conn) -> anyhow::Result<Vec<Project>> {
     public_projects(c)
 }
 
-/// Stores the commits fetched for a report, unless a newer report has arrived meanwhile.
-pub fn set_commits(c: &Conn, project_id: i64, for_commit: Option<&str>, commits_json: &str) -> anyhow::Result<bool> {
-    Ok(c.execute(
-        "UPDATE projects SET commits_json = ?3 WHERE id = ?1 AND last_commit IS ?2",
-        params![project_id, for_commit, commits_json],
-    )? > 0)
+/// Stores the commits fetched for a version's report, unless a newer report has arrived
+/// meanwhile.
+pub fn set_commits(c: &mut Conn, project_id: i64, version: &str, for_commit: Option<&str>, commits_json: &str) -> anyhow::Result<bool> {
+    let tx = c.transaction()?;
+    let updated = tx.execute(
+        "UPDATE project_versions SET commits_json = ?4 WHERE project_id = ?1 AND version = ?2 AND last_commit IS ?3",
+        params![project_id, version, for_commit, commits_json],
+    )? > 0;
+    let is_default: bool = tx.query_row(
+        "SELECT default_version = ?2 FROM projects WHERE id = ?1",
+        params![project_id, version],
+        |r| r.get(0),
+    )?;
+    if updated && is_default {
+        mirror_version(&tx, project_id, version)?;
+    }
+    tx.commit()?;
+    Ok(updated)
 }
 
 /// Projects registered for a GitHub repository (`owner/name`, case-insensitive).

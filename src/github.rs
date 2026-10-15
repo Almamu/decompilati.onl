@@ -3,7 +3,7 @@
 use axum::http::header;
 use serde::{Deserialize, Serialize};
 
-use crate::{app::AppState, cache::project_paths, db};
+use crate::{app::AppState, cache::version_paths, db};
 
 /// How many commits are kept for display.
 const SHOWN: usize = 8;
@@ -108,8 +108,8 @@ async fn fetch(state: &AppState, repo: &str, prev: Option<&str>, head: Option<&s
 
 /// Background task run after a report is stored: fetch and save the commits, then refresh
 /// the cached pages.
-pub fn spawn_commit_fetch(state: AppState, project: db::Project, report_commit: Option<String>) {
-    let prev = project.last_commit.clone().filter(|c| is_commit_hash(c));
+pub fn spawn_commit_fetch(state: AppState, project: db::Project, version: String, prev_commit: Option<String>, report_commit: Option<String>) {
+    let prev = prev_commit.filter(|c| is_commit_hash(c));
     let head = report_commit.clone().filter(|c| is_commit_hash(c));
     tokio::spawn(async move {
         let list = match fetch(&state, &project.repo, prev.as_deref(), head.as_deref()).await {
@@ -123,14 +123,14 @@ pub fn spawn_commit_fetch(state: AppState, project: db::Project, report_commit: 
             Ok(j) => j,
             Err(_) => return,
         };
-        let id = project.id;
+        let (id, v) = (project.id, version.clone());
         let saved = state
             .db
-            .run(move |c| db::set_commits(c, id, report_commit.as_deref(), &json))
+            .run(move |c| db::set_commits(c, id, &v, report_commit.as_deref(), &json))
             .await
             .unwrap_or(false);
         if saved {
-            state.cache.invalidate(project_paths(&project.slug, &project.platform));
+            state.cache.invalidate(version_paths(&project.slug, &project.platform, &version));
         }
     });
 }

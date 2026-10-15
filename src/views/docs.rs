@@ -77,6 +77,7 @@ pub fn docs(base_url: &str, app_slug: Option<&str>) -> Markup {
             table {
                 thead { tr { th { "Field" } th { "Description" } } }
                 tbody {
+                    tr { td { code { "version" } } td { "Optional game version (e.g. " code { "us" } ", " code { "europe" } "). Each version keeps its own progress and history, and the project page shows a tab per version. Can also be given as " code { "?version=" } ". The project owner picks which version is shown on cards and listings." } }
                     tr { td { code { "unit" } } td { "Free text label for the numbers, e.g. " code { "bytes" } " or " code { "functions" } " (default " code { "bytes" } ")." } }
                     tr { td { code { "code.total" } } td { "Total amount of code." } }
                     tr { td { code { "code.matching" } } td { "Code decompiled and matching the original binary." } }
@@ -96,7 +97,7 @@ pub fn docs(base_url: &str, app_slug: Option<&str>) -> Markup {
             p { "If your project already generates an " a href="https://github.com/encounter/objdiff" { "objdiff" } " report for decomp.dev, send that file as it is. "
                 "It's detected automatically (or force it with " code { "?format=objdiff" } "). Matched code counts as matching; fuzzy-matched code beyond that counts as non-matching; "
                 "data uses objdiff's matched data; and " code { "progress_categories" } " become areas, with their units inside them." }
-            p { "objdiff reports don't include a commit, so pass it in the query string. Reports can be large: send them gzip-compressed with "
+            p { "objdiff reports don't include a commit or a version, so pass them in the query string (" code { "?commit=…&version=us" } "). Reports can be large: send them gzip-compressed with "
                 code { "Content-Encoding: gzip" } " (up to 64 MB per request)." }
             pre.code { (OBJDIFF_ACTION) (base_url) }
             p { "After each report, the project page lists the commits since the previous report, fetched from GitHub." }

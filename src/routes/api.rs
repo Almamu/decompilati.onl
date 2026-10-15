@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::{
     app::{ApiError, AppState},
     auth::{MaybeUser, RequireUser},
-    cache::project_paths,
+    cache::{project_paths, version_paths},
     db,
     objdiff,
     report::ReportInput,
@@ -23,6 +23,8 @@ use crate::{
 pub struct ProgressQuery {
     /// `objdiff` forces objdiff's report format; by default it's detected from the body.
     format: Option<String>,
+    /// Game version (e.g. `us`, `europe`) for reports that don't name one.
+    version: Option<String>,
     /// Commit and message for report formats that don't carry them (objdiff).
     commit: Option<String>,
     message: Option<String>,
@@ -57,12 +59,14 @@ pub async fn progress(State(state): State<AppState>, Query(q): Query<ProgressQue
         let input = if q.format.as_deref() == Some("objdiff") || objdiff::looks_like_objdiff(&body) {
             let r: objdiff::Report = serde_json::from_slice(&body).map_err(|e| format!("invalid objdiff report: {e}"))?;
             let mut input = r.into_input(q.commit, q.message);
+            input.version = q.version;
             input.layout = Some("treemap".into());
             input
         } else {
             let mut input: ReportInput = serde_json::from_slice(&body).map_err(|e| format!("invalid JSON: {e}"))?;
             input.commit = input.commit.or(q.commit);
             input.message = input.message.or(q.message);
+            input.version = input.version.or(q.version);
             input
         };
         input.normalize()
@@ -71,16 +75,17 @@ pub async fn progress(State(state): State<AppState>, Query(q): Query<ProgressQue
     .map_err(|e| anyhow::anyhow!(e))?
     .map_err(ApiError::bad)?;
 
-    let commit = report.commit.clone();
+    let (commit, version) = (report.commit.clone(), report.version.clone());
     let before = project.clone();
-    let changed = state.db.run(move |c| db::apply_report(c, &project, &report)).await?;
-    if changed {
-        state.cache.invalidate(project_paths(&before.slug, &before.platform));
-        crate::github::spawn_commit_fetch(state.clone(), before.clone(), commit);
+    let applied = state.db.run(move |c| db::apply_report(c, &project, &report)).await?;
+    if let Some(applied) = &applied {
+        state.cache.invalidate(version_paths(&before.slug, &before.platform, &version));
+        crate::github::spawn_commit_fetch(state.clone(), before.clone(), version.clone(), applied.prev_commit.clone(), commit);
     }
     Ok(Json(serde_json::json!({
-        "status": if changed { "updated" } else { "unchanged" },
+        "status": if applied.is_some() { "updated" } else { "unchanged" },
         "project": before.slug,
+        "version": version,
     }))
     .into_response())
 }
