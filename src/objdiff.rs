@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Deserializer};
 
-use crate::report::{AreaInput, CodeStats, DataStats, ReportInput, MAX_AREAS};
+use crate::report::{AreaInput, CodeStats, DataStats, FunctionStats, ReportInput, MAX_AREAS};
 
 /// objdiff writes 64-bit integers as strings (protobuf JSON); accept both.
 fn num<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
@@ -52,6 +52,10 @@ pub struct Measures {
     total_data: u64,
     #[serde(default, deserialize_with = "num", alias = "matchedData")]
     matched_data: u64,
+    #[serde(default, deserialize_with = "num", alias = "totalFunctions")]
+    total_functions: u64,
+    #[serde(default, deserialize_with = "num", alias = "matchedFunctions")]
+    matched_functions: u64,
 }
 
 impl Measures {
@@ -172,6 +176,10 @@ impl Report {
             unit: Some("bytes".into()),
             code: Some(self.measures.code()),
             data: Some(self.measures.data()),
+            functions: (self.measures.total_functions > 0).then(|| FunctionStats {
+                total: self.measures.total_functions,
+                matching: self.measures.matched_functions.min(self.measures.total_functions),
+            }),
             areas,
             layout: None,
             commit,
@@ -187,7 +195,7 @@ mod tests {
     #[test]
     fn converts_objdiff_report() {
         let body = br#"{
-            "measures": {"fuzzy_match_percent": 60.0, "total_code": "1000", "matched_code": "500",
+            "measures": {"fuzzy_match_percent": 60.0, "total_code": "1000", "matched_code": "500", "matched_functions": 4,
                          "total_data": "200", "matched_data": "50", "total_functions": 10},
             "units": [
                 {"name": "main/src/a", "measures": {"total_code": "600", "matched_code": "500", "fuzzy_match_percent": 90.0},
@@ -204,6 +212,7 @@ mod tests {
         let r = report.into_input(Some("abc1234".into()), None).normalize().unwrap();
         assert_eq!(r.code, CodeStats { total: 1000, matching: 500, non_matching: 100 });
         assert_eq!(r.data, DataStats { total: 200, done: 50 });
+        assert_eq!(r.functions, FunctionStats { total: 10, matching: 4 });
         assert_eq!(r.areas.len(), 2);
         assert_eq!(r.areas[0].children.len(), 2);
         assert_eq!(r.areas[0].children[0].name, "src/a");

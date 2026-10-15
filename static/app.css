@@ -247,3 +247,4 @@ pre.select { user-select: all; white-space: pre-wrap; word-break: break-all; }
 .vtab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .vtab.active .muted { color: rgba(255, 255, 255, .8); }
 footer.site p { margin: 4px 0; }
+.badge-row { display: grid; gap: 6px; margin-bottom: 12px; }

@@ -7,7 +7,7 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use crate::report::{Area, CodeStats, DataStats, Layout, Report};
+use crate::report::{Area, CodeStats, DataStats, FunctionStats, Layout, Report};
 use crate::util::now;
 
 pub type Conn = r2d2::PooledConnection<SqliteConnectionManager>;
@@ -128,6 +128,11 @@ INSERT INTO project_versions
            prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
            areas_json, last_report_at, last_commit, last_message, commits_json
     FROM projects WHERE last_report_at IS NOT NULL;
+"#, r#"
+ALTER TABLE project_versions ADD COLUMN functions_total INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE project_versions ADD COLUMN functions_matched INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN functions_total INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN functions_matched INTEGER NOT NULL DEFAULT 0;
 "#];
 
 #[derive(Debug, Clone)]
@@ -161,6 +166,8 @@ pub struct Project {
     pub layout: Layout,
     pub code: CodeStats,
     pub data: DataStats,
+    /// Function counts of the default version (`total == 0`: not reported).
+    pub functions: FunctionStats,
     pub prev_code: CodeStats,
     pub prev_data: DataStats,
     pub areas_json: String,
@@ -212,7 +219,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
-    p.commits_json, p.default_version";
+    p.commits_json, p.default_version, p.functions_total, p.functions_matched";
 
 fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -246,6 +253,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         updated_at: r.get(33)?,
         commits_json: r.get(34)?,
         default_version: r.get(35)?,
+        functions: FunctionStats { total: r.get(36)?, matching: r.get(37)? },
     })
 }
 
@@ -460,6 +468,7 @@ pub struct VersionState {
     pub layout: Layout,
     pub code: CodeStats,
     pub data: DataStats,
+    pub functions: FunctionStats,
     pub prev_code: CodeStats,
     pub prev_data: DataStats,
     pub areas_json: String,
@@ -477,6 +486,7 @@ impl VersionState {
             layout: self.layout,
             code: self.code,
             data: self.data,
+            functions: self.functions,
             prev_code: self.prev_code,
             prev_data: self.prev_data,
             areas_json: self.areas_json.clone(),
@@ -491,7 +501,7 @@ impl VersionState {
 
 const VERSION_COLS: &str = "version, unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
     prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
-    areas_json, last_report_at, last_commit, last_message, commits_json";
+    areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched";
 
 fn version_from_row(r: &Row) -> rusqlite::Result<VersionState> {
     Ok(VersionState {
@@ -507,6 +517,7 @@ fn version_from_row(r: &Row) -> rusqlite::Result<VersionState> {
         last_commit: r.get(15)?,
         last_message: r.get(16)?,
         commits_json: r.get(17)?,
+        functions: FunctionStats { total: r.get(18)?, matching: r.get(19)? },
     })
 }
 
@@ -528,10 +539,10 @@ fn mirror_version(c: &Connection, project_id: i64, version: &str) -> anyhow::Res
     c.execute(
         "UPDATE projects SET (unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
                 prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
-                areas_json, last_report_at, last_commit, last_message, commits_json) =
+                areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched) =
             (SELECT unit, layout, code_total, code_matching, code_nonmatching, data_total, data_done,
                 prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total, prev_data_done,
-                areas_json, last_report_at, last_commit, last_message, commits_json
+                areas_json, last_report_at, last_commit, last_message, commits_json, functions_total, functions_matched
              FROM project_versions v WHERE v.project_id = projects.id AND v.version = ?2)
          WHERE id = ?1 AND EXISTS (SELECT 1 FROM project_versions WHERE project_id = ?1 AND version = ?2)",
         params![project_id, version],
@@ -569,7 +580,7 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
         return Ok(insert_history(c, project.id, r, t)?.then_some(Applied { prev_commit: None, historical: true }));
     }
     if let Some(v) = &current {
-        if v.code == r.code && v.data == r.data && v.areas_json == areas_json && v.unit == r.unit && v.layout == r.layout {
+        if v.code == r.code && v.data == r.data && v.functions == r.functions && v.areas_json == areas_json && v.unit == r.unit && v.layout == r.layout {
             return Ok(None);
         }
     }
@@ -579,8 +590,9 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
     tx.execute(
         "INSERT INTO project_versions (project_id, version, unit, layout, code_total, code_matching, code_nonmatching,
                 data_total, data_done, prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total,
-                prev_data_done, areas_json, last_report_at, last_commit, last_message, commits_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, '{}')
+                prev_data_done, areas_json, last_report_at, last_commit, last_message, commits_json,
+                functions_total, functions_matched)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, '{}', ?19, ?20)
          ON CONFLICT(project_id, version) DO UPDATE SET
             unit = excluded.unit, layout = excluded.layout, code_total = excluded.code_total,
             code_matching = excluded.code_matching, code_nonmatching = excluded.code_nonmatching,
@@ -589,11 +601,12 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
             prev_code_nonmatching = excluded.prev_code_nonmatching, prev_data_total = excluded.prev_data_total,
             prev_data_done = excluded.prev_data_done, areas_json = excluded.areas_json,
             last_report_at = excluded.last_report_at, last_commit = excluded.last_commit,
-            last_message = excluded.last_message, commits_json = '{}'",
+            last_message = excluded.last_message, commits_json = '{}',
+            functions_total = excluded.functions_total, functions_matched = excluded.functions_matched",
         params![
             project.id, version, r.unit, r.layout.as_str(), r.code.total, r.code.matching, r.code.non_matching,
             r.data.total, r.data.done, prev.0.total, prev.0.matching, prev.0.non_matching, prev.1.total, prev.1.done,
-            areas_json, t, r.commit, r.message
+            areas_json, t, r.commit, r.message, r.functions.total, r.functions.matching
         ],
     )?;
     tx.execute(

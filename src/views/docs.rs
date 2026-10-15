@@ -97,6 +97,7 @@ pub fn docs(base_url: &str, app_slug: Option<&str>) -> Markup {
                     tr { td { code { "code.matching" } } td { "Code decompiled and matching the original binary." } }
                     tr { td { code { "code.non_matching" } } td { "Code decompiled to equivalent but non-matching source." } }
                     tr { td { code { "data.total" } ", " code { "data.done" } } td { "Data (tables, assets, strings…) total and decompiled. Optional." } }
+                    tr { td { code { "functions.total" } ", " code { "functions.matching" } } td { "Function counts, shown on the project page and the functions badge. Optional; objdiff reports provide them automatically." } }
                     tr { td { code { "areas" } } td { "Optional list of areas / zones for the map. Each has a " code { "name" } ", optional "
                         code { "description" } ", " code { "code" } ", " code { "data" } ", " code { "weight" } " (tile size, defaults to code total) and nested "
                         code { "children" } " (up to 4 levels, 2000 areas). Missing totals are summed from children." } }
@@ -163,14 +164,14 @@ pub fn docs(base_url: &str, app_slug: Option<&str>) -> Markup {
                     li { "objdiff has no exact \"decompiled but not matching\" figure, so non-matching code is estimated from the fuzzy match percentage." }
                     li { "Categories (" code { "progress_categories" } ") become the areas of the map, with their units inside." }
                     li { "Only JSON reports are supported, not binary protobuf ones." }
-                    li { "Badges are at " code { (base_url) "/badge/<slug>.svg" } " and show the default version." }
+                    li { "Badges are at " code { (base_url) "/badge/<slug>.svg" } " (decompiled code), plus " code { "/matching.svg" } ", " code { "/data.svg" } " and " code { "/functions.svg" } " under " code { "/badge/<slug>/" } ". They show the default version." }
                 }
             }
 
             h2 { "Read-only endpoints" }
             ul {
                 li { code { "GET /projects/{slug}/progress.json" } " — current progress of a project." }
-                li { code { "GET /badge/{slug}.svg" } " — README badge." }
+                li { code { "GET /badge/{slug}.svg" } " — README badge: decompiled code. Also " code { "/badge/{slug}/matching.svg" } ", " code { "/badge/{slug}/data.svg" } " and " code { "/badge/{slug}/functions.svg" } "." }
                 li { code { "GET /feed.xml" } " — RSS feed of recent updates." }
             }
         }

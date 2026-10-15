@@ -120,6 +120,9 @@ pub fn project_paths(slug: &str, platform: &str) -> Vec<String> {
         format!("/projects/{slug}"),
         format!("/projects/{slug}/progress.json"),
         format!("/badge/{slug}.svg"),
+        format!("/badge/{slug}/matching.svg"),
+        format!("/badge/{slug}/data.svg"),
+        format!("/badge/{slug}/functions.svg"),
         "/feed.xml".into(),
         "/sitemap.xml".into(),
     ]

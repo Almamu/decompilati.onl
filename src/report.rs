@@ -49,6 +49,20 @@ impl DataStats {
     }
 }
 
+/// Function counts; `total == 0` means the project doesn't report them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionStats {
+    pub total: u64,
+    #[serde(default, alias = "matched")]
+    pub matching: u64,
+}
+
+impl FunctionStats {
+    pub fn pct(&self) -> f64 {
+        pct(self.matching, self.total)
+    }
+}
+
 pub fn pct(part: u64, total: u64) -> f64 {
     if total == 0 { 0.0 } else { (part as f64 / total as f64 * 100.0).clamp(0.0, 100.0) }
 }
@@ -62,6 +76,8 @@ pub struct ReportInput {
     pub unit: Option<String>,
     pub code: Option<CodeStats>,
     pub data: Option<DataStats>,
+    /// Optional function counts, shown on the project page and the functions badge.
+    pub functions: Option<FunctionStats>,
     #[serde(default)]
     pub areas: Vec<AreaInput>,
     pub layout: Option<String>,
@@ -127,6 +143,7 @@ pub struct Report {
     pub unit: String,
     pub code: CodeStats,
     pub data: DataStats,
+    pub functions: FunctionStats,
     pub areas: Vec<Area>,
     pub layout: Layout,
     pub commit: Option<String>,
@@ -217,11 +234,16 @@ impl ReportInput {
         if !valid_version(&version) {
             return Err("version must be up to 32 letters, digits, dots, dashes or underscores".into());
         }
+        let functions = self.functions.unwrap_or_default();
+        if functions.matching > functions.total {
+            return Err(format!("functions.matching ({}) exceeds functions.total ({})", functions.matching, functions.total));
+        }
         Ok(Report {
             version,
             unit,
             code,
             data,
+            functions,
             areas,
             layout: self.layout.as_deref().map(Layout::parse).unwrap_or_default(),
             commit: self.commit.map(|c| clean_text(&c, 64)).filter(|c| !c.is_empty()),

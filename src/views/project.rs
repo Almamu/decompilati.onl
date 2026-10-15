@@ -62,6 +62,9 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                         div { dt { span.sw.nonmatching {} "Non-matching" } dd { (fmt_pct(p.code.non_matching_pct())) } }
                         div { dt { span.sw.none {} "Not decompiled" } dd { (fmt_pct(100.0 - p.code.decompiled_pct())) } }
                         div { dt { "Total" } dd { (fmt_count(p.code.total)) " " (p.unit) } }
+                        @if p.functions.total > 0 {
+                            div { dt { "Functions" } dd { (fmt_count(p.functions.matching)) " / " (fmt_count(p.functions.total)) } }
+                        }
                     }
                 }
                 @if p.data.total > 0 {
@@ -143,9 +146,14 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
         }
 
         section.panel {
-            h2 { "Badge" }
-            p { img src={ "/badge/" (p.slug) ".svg" } alt="progress badge" height="20"; }
-            pre.code { "[![Decompilation progress](" (base_url) "/badge/" (p.slug) ".svg)](" (base_url) "/projects/" (p.slug) ")" }
+            h2 { "Badges" }
+            p.muted { "For your README. They show the default version and update with every report." }
+            @for (path, alt) in badge_list(p) {
+                div.badge-row {
+                    img src=(path) alt=(alt) height="20";
+                    pre.code { "[![" (alt) "](" (base_url) (path) ")](" (base_url) "/projects/" (p.slug) ")" }
+                }
+            }
         }
     }
 }
@@ -212,4 +220,19 @@ fn recent_commits(p: &Project) -> Markup {
             }
         }
     }
+}
+
+/// Badge paths (relative to the site) and their alt text; data and functions only when reported.
+fn badge_list(p: &Project) -> Vec<(String, &'static str)> {
+    let mut list = vec![
+        (format!("/badge/{}.svg", p.slug), "Decompiled"),
+        (format!("/badge/{}/matching.svg", p.slug), "Matching"),
+    ];
+    if p.data.total > 0 {
+        list.push((format!("/badge/{}/data.svg", p.slug), "Data"));
+    }
+    if p.functions.total > 0 {
+        list.push((format!("/badge/{}/functions.svg", p.slug), "Functions"));
+    }
+    list
 }

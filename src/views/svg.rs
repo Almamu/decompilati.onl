@@ -229,16 +229,17 @@ pub fn history(rows: &[ReportRow]) -> String {
     out
 }
 
-/// Shields-style badge for READMEs.
-pub fn badge(label: &str, pct: f64) -> String {
-    let value = fmt_pct(pct);
+/// Shields-style badge. `pct` picks the colour; `None` draws a grey "not reported" badge.
+pub fn badge(label: &str, value: &str, pct: Option<f64>) -> String {
     let color = match pct {
-        p if p >= 100.0 => "#2ea043",
-        p if p >= 75.0 => "#57ab5a",
-        p if p >= 50.0 => "#c69026",
-        p if p >= 25.0 => "#d4762c",
-        _ => "#c94c4c",
+        None => "#9f9f9f",
+        Some(p) if p >= 100.0 => "#2ea043",
+        Some(p) if p >= 75.0 => "#57ab5a",
+        Some(p) if p >= 50.0 => "#c69026",
+        Some(p) if p >= 25.0 => "#d4762c",
+        Some(_) => "#c94c4c",
     };
+    let value = esc(value);
     let lw = 10.0 + label.chars().count() as f64 * 6.5;
     let vw = 10.0 + value.chars().count() as f64 * 7.0;
     let w = lw + vw;

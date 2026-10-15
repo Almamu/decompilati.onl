@@ -43,6 +43,7 @@ fn router(state: AppState) -> Router {
         // Old project URLs, kept working for links and badges shared before the move.
         .route("/p/{*rest}", get(public::old_project_url))
         .route("/badge/{file}", get(public::badge))
+        .route("/badge/{slug}/{kind}", get(public::badge_kind))
         .route("/docs", get(public::docs))
         .route("/feed.xml", get(public::feed))
         .route("/robots.txt", get(public::robots))

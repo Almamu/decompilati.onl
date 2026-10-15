@@ -236,6 +236,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
                     "code_matching_pct": v.code.matching_pct(),
                     "code_decompiled_pct": v.code.decompiled_pct(),
                     "data_pct": v.data.pct(),
+                    "functions": v.functions,
                     "last_report_at": v.last_report_at.map(crate::util::iso_time),
                     "last_commit": v.last_commit,
                 }))
@@ -253,6 +254,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "code_matching_pct": p.code.matching_pct(),
             "code_decompiled_pct": p.code.decompiled_pct(),
             "data_pct": p.data.pct(),
+            "functions": p.functions,
             "areas": p.areas(),
             "last_report_at": p.last_report_at.map(crate::util::iso_time),
             "last_commit": p.last_commit,
@@ -267,11 +269,43 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
     .await
 }
 
+/// `GET /badge/{slug}.svg`: decompiled code of the default version.
 pub async fn badge(State(state): State<AppState>, headers: HeaderMap, Path(file): Path<String>) -> AppResult<Response> {
     let slug = file.strip_suffix(".svg").ok_or(AppError::NotFound)?.to_string();
-    cached(&state, &headers, format!("/badge/{slug}.svg"), || async {
-        let p = load_public_project(&state, slug).await?;
-        Ok(CachedPage::new(views::svg::badge("decompiled", p.code.decompiled_pct()), "image/svg+xml"))
+    badge_response(&state, &headers, slug, "decompiled").await
+}
+
+/// `GET /badge/{slug}/{matching,data,functions}.svg`
+pub async fn badge_kind(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, file)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let kind = match file.as_str() {
+        "matching.svg" => "matching",
+        "data.svg" => "data",
+        "functions.svg" => "functions",
+        _ => return Err(AppError::NotFound),
+    };
+    badge_response(&state, &headers, slug, kind).await
+}
+
+async fn badge_response(state: &AppState, headers: &HeaderMap, slug: String, kind: &'static str) -> AppResult<Response> {
+    let key = if kind == "decompiled" { format!("/badge/{slug}.svg") } else { format!("/badge/{slug}/{kind}.svg") };
+    cached(state, headers, key, || async {
+        let p = load_public_project(state, slug).await?;
+        let svg = match kind {
+            "matching" => views::svg::badge("matching", &crate::util::fmt_pct(p.code.matching_pct()), Some(p.code.matching_pct())),
+            "data" if p.data.total > 0 => views::svg::badge("data", &crate::util::fmt_pct(p.data.pct()), Some(p.data.pct())),
+            "functions" if p.functions.total > 0 => views::svg::badge(
+                "functions",
+                &format!("{}/{}", crate::util::fmt_count(p.functions.matching), crate::util::fmt_count(p.functions.total)),
+                Some(p.functions.pct()),
+            ),
+            "data" | "functions" => views::svg::badge(kind, "n/a", None),
+            _ => views::svg::badge("decompiled", &crate::util::fmt_pct(p.code.decompiled_pct()), Some(p.code.decompiled_pct())),
+        };
+        Ok(CachedPage::new(svg, "image/svg+xml"))
     })
     .await
 }
