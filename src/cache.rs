@@ -28,7 +28,8 @@ pub struct CachedPage {
 impl CachedPage {
     pub fn new(body: impl Into<Bytes>, content_type: &'static str) -> Arc<Self> {
         let body = body.into();
-        let etag = format!("\"{}\"", &sha256_hex(&body)[..20]);
+        // Weak, so Cloudflare keeps it when it re-encodes the body (it drops strong ETags).
+        let etag = format!("W/\"{}\"", &sha256_hex(&body)[..20]);
         Arc::new(CachedPage { body, etag, content_type })
     }
 }
@@ -119,7 +120,7 @@ impl PageCache {
         let not_modified = req_headers
             .get(header::IF_NONE_MATCH)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.split(',').any(|t| t.trim().trim_start_matches("W/") == page.etag));
+            .is_some_and(|v| v.split(',').any(|t| t.trim().trim_start_matches("W/") == page.etag.trim_start_matches("W/")));
         let mut res = if not_modified {
             StatusCode::NOT_MODIFIED.into_response()
         } else {
