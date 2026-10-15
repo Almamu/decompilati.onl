@@ -288,8 +288,6 @@ footer.site p { margin: 4px 0; }
 .stat-card .bar { height: 14px; border-radius: 7px; }
 .stat-parts { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .85rem; color: var(--muted); }
 .stat-parts b { color: var(--text); font-variant-numeric: tabular-nums; }
-.stat-linked { margin: 0; font-size: .85rem; color: var(--muted); }
-.stat-linked b { color: var(--text); font-variant-numeric: tabular-nums; }
 .inline-form { display: flex; gap: 8px; flex-wrap: wrap; } .inline-form input { flex: 1; min-width: 240px; }
 button.toggle { background: none; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); cursor: pointer;
   font-size: .75rem; line-height: 1; padding: 2px 5px; }

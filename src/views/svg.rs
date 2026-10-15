@@ -95,16 +95,17 @@ fn fit_text(s: &str, width: f64, char_w: f64) -> Option<String> {
 }
 
 fn area_tooltip(a: &Area, unit: &str) -> String {
-    let mut t = format!(
-        "{}\nCode: {} matching, {} partially matching ({} {unit})",
-        a.name,
+    let mut t = a.name.clone();
+    if a.code.linked > 0 {
+        let _ = write!(t, "\nFully linked: {}", fmt_pct(a.code.linked_pct()));
+    }
+    let _ = write!(
+        t,
+        "\nCode: {} matching, {} partially matching ({} {unit})",
         fmt_pct(a.code.matching_pct()),
         fmt_pct(a.code.non_matching_pct()),
         fmt_count(a.code.total)
     );
-    if a.code.linked > 0 {
-        let _ = write!(t, "\nFully linked: {}", fmt_pct(a.code.linked_pct()));
-    }
     if a.functions.total > 0 {
         let _ = write!(t, "\nFunctions: {}/{} matching", fmt_count(a.functions.matching), fmt_count(a.functions.total));
     }

@@ -79,14 +79,14 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     span.stat-sub { "decompiled of " (fmt_count(p.code.total)) " " (p.unit) }
                     (code_bar(&p.code))
                     ul.stat-parts {
+                        @if p.code.linked > 0 {
+                            li title="Code in units built entirely from decompiled source, with nothing taken from the original binary" {
+                                span.sw.linked {} b { (fmt_pct(p.code.linked_pct())) } " fully linked"
+                            }
+                        }
                         li { span.sw.matching {} b { (fmt_pct(p.code.matching_pct())) } " matching" }
                         li { span.sw.nonmatching {} b { (fmt_pct(p.code.non_matching_pct())) } " partially matching" }
                         li { span.sw.none {} b { (fmt_pct(100.0 - p.code.decompiled_pct())) } " to do" }
-                    }
-                    @if p.code.linked > 0 {
-                        p.stat-linked title="Code in units built entirely from decompiled source, with nothing taken from the original binary" {
-                            span.sw.linked {} b { (fmt_pct(p.code.linked_pct())) } " fully linked"
-                        }
                     }
                 }
                 @if p.data.total > 0 {
@@ -144,10 +144,10 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
             section.panel {
                 h2 { "History" }
                 div.history-legend {
+                    @if reports.iter().any(|r| r.code.linked > 0) { span { span.sw.linked {} "Fully linked" } }
                     span { span.sw.decomp {} "Decompiled" }
                     span { span.sw.matching {} "Matching" }
                     @if p.data.total > 0 { span { span.sw.data {} "Data" } }
-                    @if reports.iter().any(|r| r.code.linked > 0) { span { span.sw.linked {} "Fully linked" } }
                 }
                 (PreEscaped(svg::history(reports)))
             }

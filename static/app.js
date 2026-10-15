@@ -156,7 +156,7 @@
         line.setAttribute("visibility", "visible");
         tip.textContent = "";
         tip.appendChild(el("strong", {}, new Date(p[0] * 1000).toLocaleString()));
-        [["decomp", "Decompiled", p[1]], ["matching", "Matching", p[2]], ["data", "Data", p[3]], ["linked", "Fully linked", p[5]]].forEach(function (row) {
+        [["linked", "Fully linked", p[5]], ["decomp", "Decompiled", p[1]], ["matching", "Matching", p[2]], ["data", "Data", p[3]]].forEach(function (row) {
           if (row[2] === null || row[2] === undefined) return;
           var r = el("div", {});
           r.appendChild(el("span", { class: "sw " + row[0] }));
