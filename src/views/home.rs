@@ -47,16 +47,15 @@ pub fn home(projects: &[&Project], total: usize) -> Markup {
             }
             (legend())
         }
-
-        section {
-            (card_grid(projects))
-        }
-
         @if !projects.is_empty() {
-            section {
+            section.browse-platforms {
                 h2.section-title { "Browse by platform" }
                 (platform_nav(None, projects))
             }
+        }
+
+        section {
+            (card_grid(projects))
         }
     }
 }

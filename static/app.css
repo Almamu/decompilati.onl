@@ -350,3 +350,4 @@ section > .search { margin: 0 0 12px; }
 .form:has(.repo-choice input[value="github"]:checked) .repo-external { display: none; }
 .form:has(.repo-choice input[value="external"]:checked) .repo-github { display: none; }
 .btn-repo { background: #57606a; color: #fff; }
+.browse-platforms { margin-bottom: 20px; } .browse-platforms .platforms { margin-bottom: 0; }
