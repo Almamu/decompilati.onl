@@ -68,9 +68,11 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Pro
             (card_grid(projects))
         }
 
-        section {
-            h2.section-title { "Browse by platform" }
-            (platform_nav(None, projects))
+        @if !projects.is_empty() {
+            section {
+                h2.section-title { "Browse by platform" }
+                (platform_nav(None, projects))
+            }
         }
     }
 }
