@@ -333,7 +333,7 @@ section > .search { margin: 0 0 12px; }
   #auth { order: 2; }
   #auth .label, #auth .desktop-only { display: none; }
   .btn-login { padding: 7px 9px; }
-  .menu-toggle { order: 3; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 34px;
+  .menu-toggle { order: -1; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 34px;
     border: 1px solid var(--line); border-radius: 8px; color: var(--text); cursor: pointer; }
   .menu-check:focus-visible ~ .menu-toggle { outline: 2px solid var(--accent); outline-offset: 2px; }
   .menu-check:checked ~ .menu-toggle { background: var(--panel); }
