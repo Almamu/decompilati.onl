@@ -120,7 +120,7 @@ pub struct Area {
 
 impl Area {
     pub fn size(&self) -> f64 {
-        self.weight.unwrap_or(self.code.total.max(self.data.total) as f64).max(0.0)
+        self.weight.unwrap_or(self.code.total as f64).max(0.0)
     }
 }
 

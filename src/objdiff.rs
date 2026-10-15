@@ -59,6 +59,20 @@ pub struct Measures {
 }
 
 impl Measures {
+    /// A report with just these totals (no areas), e.g. for decomp.dev history entries.
+    pub fn into_input(&self, commit: Option<String>, message: Option<String>) -> ReportInput {
+        ReportInput {
+            version: None,
+            unit: Some("bytes".into()),
+            code: Some(self.code()),
+            data: Some(self.data()),
+            functions: self.functions(),
+            areas: vec![],
+            layout: None,
+            commit,
+            message,
+        }
+    }
     fn code(&self) -> CodeStats {
         let total = self.total_code;
         let matching = self.matched_code.min(total);

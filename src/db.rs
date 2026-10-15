@@ -150,6 +150,9 @@ CREATE TABLE import_jobs (
 );
 CREATE INDEX import_jobs_project ON import_jobs(project_id, id);
 CREATE INDEX import_jobs_status ON import_jobs(status, id);
+"#, r#"
+ALTER TABLE import_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'github';
+ALTER TABLE import_jobs ADD COLUMN source TEXT;
 "#];
 
 #[derive(Debug, Clone)]
@@ -795,6 +798,10 @@ pub struct ImportJob {
     pub created_at: i64,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+    /// `github` (workflow artifacts) or `decompdev` (decomp.dev history).
+    pub kind: String,
+    /// For `decompdev`: the project's decomp.dev URL.
+    pub source: Option<String>,
     /// Jobs queued ahead of this one (only meaningful while queued).
     pub queue_position: i64,
 }
@@ -807,7 +814,7 @@ impl ImportJob {
 
 const JOB_COLS: &str = "j.id, j.project_id, p.slug, p.name, j.status, j.attempts, j.runs_total, j.runs_done, j.imported,
     j.error, j.created_at, j.started_at, j.finished_at,
-    (SELECT COUNT(*) FROM import_jobs q WHERE q.status = 'queued' AND q.id < j.id)";
+    (SELECT COUNT(*) FROM import_jobs q WHERE q.status = 'queued' AND q.id < j.id), j.kind, j.source";
 
 fn job_from_row(r: &Row) -> rusqlite::Result<ImportJob> {
     Ok(ImportJob {
@@ -825,11 +832,13 @@ fn job_from_row(r: &Row) -> rusqlite::Result<ImportJob> {
         started_at: r.get(11)?,
         finished_at: r.get(12)?,
         queue_position: r.get(13)?,
+        kind: r.get(14)?,
+        source: r.get(15)?,
     })
 }
 
 /// Queues an import for a project, or returns `None` if one is already queued or running.
-pub fn create_import_job(c: &mut Conn, project_id: i64, user_id: i64) -> anyhow::Result<Option<i64>> {
+pub fn create_import_job(c: &mut Conn, project_id: i64, user_id: i64, kind: &str, source: Option<&str>) -> anyhow::Result<Option<i64>> {
     let tx = c.transaction()?;
     let active: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM import_jobs WHERE project_id = ?1 AND status IN ('queued', 'running'))",
@@ -840,8 +849,8 @@ pub fn create_import_job(c: &mut Conn, project_id: i64, user_id: i64) -> anyhow:
         return Ok(None);
     }
     tx.execute(
-        "INSERT INTO import_jobs (project_id, requested_by, status, created_at) VALUES (?1, ?2, 'queued', ?3)",
-        params![project_id, user_id, now()],
+        "INSERT INTO import_jobs (project_id, requested_by, status, created_at, kind, source) VALUES (?1, ?2, 'queued', ?3, ?4, ?5)",
+        params![project_id, user_id, now(), kind, source],
     )?;
     let id = tx.last_insert_rowid();
     tx.commit()?;
@@ -892,4 +901,9 @@ pub fn finish_import_job(c: &Conn, id: i64, error: Option<&str>) -> anyhow::Resu
         params![id, if error.is_some() { "failed" } else { "finished" }, error, now()],
     )?;
     Ok(())
+}
+
+/// What a job imports: its kind and source (see `ImportJob`).
+pub fn import_job_source(c: &Conn, id: i64) -> anyhow::Result<(String, Option<String>)> {
+    Ok(c.query_row("SELECT kind, source FROM import_jobs WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?)
 }

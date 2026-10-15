@@ -36,7 +36,7 @@ impl AppState {
             http,
             limiter: Arc::new(RateLimiter::default()),
             repo_cache: Arc::default(),
-            import_slots: Arc::new(tokio::sync::Semaphore::new(crate::github_app::MAX_CONCURRENT_IMPORTS)),
+            import_slots: Arc::new(tokio::sync::Semaphore::new(crate::imports::MAX_CONCURRENT_IMPORTS)),
         })
     }
 }

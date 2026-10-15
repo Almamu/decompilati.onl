@@ -7,6 +7,8 @@ mod github;
 mod github_app;
 mod db;
 mod images;
+mod imports;
+mod decompdev;
 mod objdiff;
 mod platforms;
 mod report;
@@ -68,6 +70,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/dashboard/p/{id}/key", post(dashboard::regenerate_key))
         .route("/dashboard/p/{id}/import-history", post(dashboard::import_history))
+        .route("/dashboard/p/{id}/import-decompdev", post(dashboard::import_decompdev))
         .route("/dashboard/p/{id}/delete", post(dashboard::delete))
         .route("/admin", get(dashboard::admin))
         .route("/admin/p/{id}/spotlight", post(dashboard::admin_spotlight))
@@ -86,7 +89,7 @@ fn router(state: AppState) -> Router {
     Router::new()
         .merge(public)
         .merge(private)
-        .fallback(|| async { app::AppError::NotFound })
+        .fallback(public::legacy_or_not_found)
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
@@ -125,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
     let bind = config.bind;
     let state = AppState::new(config, db)?;
 
-    if let Err(e) = github_app::resume_import_jobs(&state).await {
+    if let Err(e) = imports::resume(&state).await {
         tracing::error!(error = %e, "couldn't resume history imports");
     }
 

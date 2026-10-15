@@ -333,11 +333,6 @@ struct RunList {
     workflow_runs: Vec<WorkflowRun>,
 }
 
-/// How many history imports may run at the same time; the rest wait in the queue.
-pub const MAX_CONCURRENT_IMPORTS: usize = 10;
-/// A job that keeps getting interrupted (e.g. by restarts) is given up after this many starts.
-const MAX_ATTEMPTS: i64 = 3;
-
 /// Queues an import of a project's history from its past workflow runs. Errors if the app
 /// isn't installed on the repository or an import is already queued or running.
 pub async fn start_history_import(state: &AppState, project: &db::Project, user_id: i64) -> Result<(), String> {
@@ -346,57 +341,16 @@ pub async fn start_history_import(state: &AppState, project: &db::Project, user_
         .await
         .map_err(|_| "Couldn't reach GitHub, please try again.".to_string())?
         .ok_or_else(|| format!("Install the GitHub App on {} first.", project.repo))?;
-    let pid = project.id;
-    let job = state
-        .db
-        .run(move |c| db::create_import_job(c, pid, user_id))
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("An import is already queued or running for this project.")?;
-    spawn_job(state.clone(), job, project.id);
-    Ok(())
+    crate::imports::queue(state, project, user_id, "github", None).await
 }
 
-/// Restarts the jobs a previous run of the server didn't finish. Call once at startup.
-pub async fn resume_import_jobs(state: &AppState) -> anyhow::Result<()> {
-    let jobs = state.db.run(|c| db::unfinished_import_jobs(c)).await?;
-    if !jobs.is_empty() {
-        tracing::info!(count = jobs.len(), "resuming history imports");
-    }
-    for (job, project) in jobs {
-        spawn_job(state.clone(), job, project);
-    }
-    Ok(())
-}
-
-/// Runs a queued job once one of the `MAX_CONCURRENT_IMPORTS` slots is free.
-fn spawn_job(state: AppState, job: i64, project_id: i64) {
-    tokio::spawn(async move {
-        let Ok(_slot) = state.import_slots.clone().acquire_owned().await else { return };
-        let result = run_job(&state, job, project_id).await;
-        let error = result.err().map(|e| e.to_string());
-        if let Some(e) = &error {
-            tracing::warn!(job, project_id, error = %e, "history import failed");
-        }
-        if let Err(e) = state.db.run(move |c| db::finish_import_job(c, job, error.as_deref())).await {
-            tracing::error!(job, error = %e, "couldn't record the end of a history import");
-        }
-    });
-}
-
-async fn run_job(state: &AppState, job: i64, project_id: i64) -> anyhow::Result<()> {
-    let attempts = state.db.run(move |c| db::start_import_job(c, job)).await?;
-    anyhow::ensure!(attempts <= MAX_ATTEMPTS, "gave up after {MAX_ATTEMPTS} interrupted attempts");
+/// Job body for `github` imports (run by `imports`).
+pub async fn import_from_actions(state: &AppState, project: &db::Project, job: i64) -> anyhow::Result<()> {
     let app = state.config.github_app.clone().ok_or_else(|| anyhow::anyhow!("the GitHub App isn't configured"))?;
-    let project = state
-        .db
-        .run(move |c| db::project_by_id(c, project_id))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("the project no longer exists"))?;
     let installation = installation_for_repo(state, &app, &project.repo)
         .await?
         .ok_or_else(|| anyhow::anyhow!("the GitHub App isn't installed on {} anymore", project.repo))?;
-    import_history(state, &app, installation, &project, job).await
+    import_history(state, &app, installation, project, job).await
 }
 
 async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u64, project: &db::Project, job: i64) -> anyhow::Result<()> {
@@ -425,9 +379,7 @@ async fn import_history(state: &AppState, app: &GithubAppConfig, installation: u
     }
     runs.reverse();
     let total = runs.len();
-    let progress = |done: usize, imported: usize| async move {
-        let _ = state.db.run(move |c| db::import_job_progress(c, job, total, done, imported)).await;
-    };
+    let progress = |done: usize, imported: usize| crate::imports::progress(state, job, total, done, imported);
     progress(0, 0).await;
 
     let mut imported = 0;

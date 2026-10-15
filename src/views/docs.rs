@@ -310,18 +310,23 @@ fn decomp_dev(base_url: &str, app_slug: Option<&str>) -> Markup {
             "The project's settings choose which version is shown on cards, listings and badges." }
 
         h2 #history { "4. Import your history" }
+        p { strong { "From decomp.dev: " } "on the project's dashboard page, \"Import from decomp.dev\" takes the project's decomp.dev URL (for example " code { "https://decomp.dev/owner/repo" } ") and imports its whole history: every version and every report, with the latest report's areas. It doesn't need the GitHub App, and it can be run again safely." }
         p { strong { "From GitHub Actions: " } "on the project's dashboard page, \"Import history from GitHub Actions\" (needs the GitHub App) imports the report artifacts of past successful runs, each at the time of its run. "
             "GitHub deletes artifacts after their retention period (90 days by default), so this usually covers the last few months." }
-        p { strong { "Older history: " } "rebuild the report for past commits and send it with a " code { "timestamp" } ". For example, every 20th commit (adjust the build commands to your project):" }
+        p { strong { "Anything else: " } "rebuild the report for past commits and send it with a " code { "timestamp" } ". For example, every 20th commit (adjust the build commands to your project):" }
         pre.code { (BACKFILL_HEAD) (base_url) (BACKFILL_SCRIPT) }
         p.muted { "Re-running it is safe: commits already in the history are skipped." }
+
+        h2 #links { "5. Old links keep working" }
+        p { "decomp.dev URLs work on this domain too: replace " code { "decomp.dev" } " with " code { "decompilati.onl" } " and " code { "/{owner}/{repo}" } ", " code { "/{owner}/{repo}/{version}" } ", " code { ".json" } " and " code { ".svg" } " badge links (with " code { "measure=code" } ", " code { "data" } " or " code { "functions" } ") redirect to the project registered for that repository." }
 
         h2 { "Differences from decomp.dev" }
         ul {
             li { "objdiff has no exact \"decompiled but not matching\" figure, so non-matching code is estimated from the fuzzy match percentage." }
             li { "Categories (" code { "progress_categories" } ") become the areas of the map, with their units inside." }
             li { "Only JSON reports are supported, not binary protobuf ones." }
-            li { "Badges have new URLs; see " a href="/docs/badges" { "Badges & data" } "." }
+            li { "Badges have their own URLs (see " a href="/docs/badges" { "Badges & data" } "), but old decomp.dev badge links redirect to them." }
+            li { "The map of areas shows code only; data appears in the progress cards and the area table." }
         }
     }
 }

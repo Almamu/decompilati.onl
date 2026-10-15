@@ -237,17 +237,30 @@ pub fn edit_project(
                     p { "If your CI uploads objdiff's " code { "report.json" } " as an artifact named " code { "<version>_report" } " (as decomp.dev required), install the GitHub App on "
                         code { (p.repo) } ". Every successful workflow run on the default branch is then imported automatically, with no API key needed." }
                     p { a.btn href={ "https://github.com/apps/" (slug) "/installations/new" } rel="noopener" { "Install the GitHub App" } }
-                    h3 { "Import history" }
-                    p { "Imports the " code { "<version>_report" } " artifacts of past successful runs on the default branch, oldest first, so the history graph starts before you joined. "
-                        "GitHub only keeps artifacts for a limited time (90 days by default); for older history, see " a href="/docs/decomp-dev" { "backfilling through the API" } "." }
-                    @if let Some(job) = import {
-                        (import_job_status(job))
+                }
+            }
+
+            div.panel {
+                h2 { "Import history" }
+                p.muted { "Fill the history graph with progress from before the project was registered here. Imports run in the background, and reports already in the history are skipped, so running one again is safe." }
+                @if let Some(job) = import {
+                    (import_job_status(job))
+                }
+                @if !import.is_some_and(|j| j.is_active()) {
+                    h3 { "From decomp.dev" }
+                    p { "Imports the project's whole history on decomp.dev, every version, with the latest report's areas." }
+                    form.form.inline-form method="post" action={ "/dashboard/p/" (p.id) "/import-decompdev" } {
+                        input type="url" name="url" required value={ "https://decomp.dev/" (p.repo) } aria-label="decomp.dev URL";
+                        button.btn.btn-ghost type="submit" { "Import from decomp.dev" }
                     }
-                    @if !import.is_some_and(|j| j.is_active()) {
+                    @if app_slug.is_some() {
+                        h3 { "From GitHub Actions" }
+                        p { "Imports the " code { "<version>_report" } " artifacts of past successful runs on the default branch. Needs the GitHub App; GitHub only keeps artifacts for a limited time (90 days by default)." }
                         form method="post" action={ "/dashboard/p/" (p.id) "/import-history" } {
-                            button.btn.btn-ghost type="submit" { "Import history from GitHub Actions" }
+                            button.btn.btn-ghost type="submit" { "Import from GitHub Actions" }
                         }
                     }
+                    p.muted.small { "For anything older, " a href="/docs/report-format#history" { "backfill through the API" } "." }
                 }
             }
 
@@ -282,7 +295,7 @@ pub fn admin(projects: &[Project], users: &[User], jobs: &[crate::db::ImportJob]
         h1 { "Admin" }
         div.panel {
             h2 { "History imports" }
-            p.muted { "At most " (crate::github_app::MAX_CONCURRENT_IMPORTS) " run at the same time; the rest wait in the queue. Unfinished jobs restart when the server does." }
+            p.muted { "At most " (crate::imports::MAX_CONCURRENT_IMPORTS) " run at the same time; the rest wait in the queue. Unfinished jobs restart when the server does." }
             @if jobs.is_empty() {
                 p.muted { "No imports yet." }
             } @else {
@@ -292,7 +305,7 @@ pub fn admin(projects: &[Project], users: &[User], jobs: &[crate::db::ImportJob]
                         @for j in jobs {
                             tr {
                                 td.num { "#" (j.id) }
-                                td { a href={ "/projects/" (j.project_slug) } { (j.project_name) } }
+                                td { a href={ "/projects/" (j.project_slug) } { (j.project_name) } br; span.muted.small title=(j.source.as_deref().unwrap_or("")) { (job_source(j)) } }
                                 td {
                                     span.badge.warn[j.status == "failed"] { (j.status) }
                                     @if j.status == "queued" && j.queue_position > 0 { " " span.muted { "#" (j.queue_position + 1) } }
@@ -366,21 +379,29 @@ fn import_job_status(job: &crate::db::ImportJob) -> Markup {
     html! {
         @match job.status.as_str() {
             "queued" => p.notice {
-                "Import queued"
+                (job_source(job)) " import queued"
                 @if job.queue_position > 0 { ": " (job.queue_position) " job(s) ahead of it" }
                 ". Reload the page to follow it."
             },
             "running" => p.notice {
-                "Import running: " (job.runs_done) " of " (job.runs_total) " workflow runs checked, " (job.imported) " reports imported. Reload the page to update."
+                (job_source(job)) " import running: " (job.runs_done) " of " (job.runs_total) " " (job_unit(job)) " checked, " (job.imported) " reports imported. Reload the page to update."
             },
             "failed" => p.notice.err {
-                "The last import failed after " (job.runs_done) " of " (job.runs_total) " workflow runs: " (job.error.as_deref().unwrap_or("unknown error"))
+                "The last " (job_source(job)) " import failed after " (job.runs_done) " of " (job.runs_total) " " (job_unit(job)) ": " (job.error.as_deref().unwrap_or("unknown error"))
             },
             _ => p.notice.ok {
-                "Last import finished: " (job.runs_done) " workflow runs checked, " (job.imported) " reports imported"
+                "Last " (job_source(job)) " import finished: " (job.runs_done) " " (job_unit(job)) " checked, " (job.imported) " reports imported"
                 @if let Some(t) = job.finished_at { ", " (time_ago(t)) }
                 "."
             },
         }
     }
+}
+
+fn job_source(job: &crate::db::ImportJob) -> &'static str {
+    if job.kind == "decompdev" { "decomp.dev" } else { "GitHub Actions" }
+}
+
+fn job_unit(job: &crate::db::ImportJob) -> &'static str {
+    if job.kind == "decompdev" { "history entries" } else { "workflow runs" }
 }

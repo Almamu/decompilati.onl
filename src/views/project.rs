@@ -8,7 +8,7 @@ use crate::{
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{code_bar, cover, data_bar, last_change, legend, platform_chip, vote},
+        components::{code_bar, cover, data_bar, last_change, legend_code, platform_chip, vote},
         layout::time_ago,
         svg,
     },
@@ -104,7 +104,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
         @if !areas.is_empty() {
             section.panel {
                 h2 { "Areas" }
-                (legend())
+                (legend_code())
                 @match p.layout {
                     Layout::Treemap => div.treemap-wrap { (PreEscaped(svg::treemap(&areas, &p.unit))) },
                     Layout::Grid => div.area-grid { @for a in &areas { (area_tile(a)) } },
@@ -113,7 +113,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     summary { "All areas as a table" }
                     table {
                         thead { tr { th { "Area" } th { "Matching" } th { "Non-matching" } th { "Data" } @if with_functions { th.num { "Functions" } } th.num { "Size (" (p.unit) ")" } } }
-                        tbody { @for a in &areas { (area_rows(a, 0, with_functions)) } }
+                        tbody { @for (i, a) in areas.iter().enumerate() { (area_rows(a, &format!("a{i}"), None, 0, with_functions)) } }
                     }
                 }
             }
@@ -182,7 +182,6 @@ fn area_tile(a: &Area) -> Markup {
         div.area-tile title=(a.description.as_deref().unwrap_or("")) {
             div.area-name { (a.name) span.pval { (fmt_pct(a.code.decompiled_pct())) } }
             (code_bar(&a.code))
-            @if a.data.total > 0 { (data_bar(&a.data)) }
             @if a.functions.total > 0 {
                 div.muted.small { (fmt_count(a.functions.matching)) " / " (fmt_count(a.functions.total)) " functions matching" }
             }
@@ -197,10 +196,19 @@ fn area_tile(a: &Area) -> Markup {
     }
 }
 
-fn area_rows(a: &Area, depth: usize, with_functions: bool) -> Markup {
+/// One table row per area. Children start collapsed; the toggle in their parent's row
+/// (handled by app.js) shows them.
+fn area_rows(a: &Area, id: &str, parent: Option<&str>, depth: usize, with_functions: bool) -> Markup {
     html! {
-        tr {
-            td style={ "padding-left:" (0.5 + depth as f64 * 1.2) "em" } { (a.name) }
+        tr data-row=(id) data-parent=[parent] hidden[parent.is_some()] {
+            td style={ "padding-left:" (0.5 + depth as f64 * 1.2) "em" } {
+                @if !a.children.is_empty() {
+                    button.toggle type="button" data-toggle=(id) aria-expanded="false" title="Show what's inside" { "▸" }
+                    " "
+                }
+                (a.name)
+                @if !a.children.is_empty() { " " span.muted.small { "(" (a.children.len()) ")" } }
+            }
             td { (fmt_pct(a.code.matching_pct())) }
             td { (fmt_pct(a.code.non_matching_pct())) }
             td { @if a.data.total > 0 { (fmt_pct(a.data.pct())) } @else { "—" } }
@@ -209,7 +217,9 @@ fn area_rows(a: &Area, depth: usize, with_functions: bool) -> Markup {
             }
             td.num { (fmt_count(a.code.total)) }
         }
-        @for c in &a.children { (area_rows(c, depth + 1, with_functions)) }
+        @for (i, c) in a.children.iter().enumerate() {
+            (area_rows(c, &format!("{id}-{i}"), Some(id), depth + 1, with_functions))
+        }
     }
 }
 

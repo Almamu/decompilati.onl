@@ -109,6 +109,10 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
                 .ok_or("Pick one of your public repositories from the list.")?
         }
     };
+    // decomp.dev-style /{owner}/{repo} links redirect to projects, so owners can't shadow site pages.
+    if repo.split('/').next().is_some_and(crate::util::is_reserved_name) {
+        return Err("Repositories owned by an account with a name reserved for this site's pages can't be registered.".into());
+    }
     let website = match f.website.trim() {
         "" => None,
         w => Some(clean_url(w).ok_or("Website must be an http(s) URL.")?),
@@ -376,6 +380,25 @@ pub async fn import_history(State(state): State<AppState>, RequireUser(u): Requi
     let p = owned(&state, &u, id).await?;
     match crate::github_app::start_history_import(&state, &p, u.user.id).await {
         Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("History import queued. It runs in the background; reload this page to follow it."), None).await),
+        Err(e) => Ok(edit_page(&state, &u, &p, Some(&e), None, None).await),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DecompDevForm {
+    url: String,
+}
+
+/// Queues an import of the project's history from decomp.dev.
+pub async fn import_decompdev(
+    State(state): State<AppState>,
+    RequireUser(u): RequireUser,
+    Path(id): Path<i64>,
+    Form(f): Form<DecompDevForm>,
+) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    match crate::decompdev::start(&state, &p, &f.url, u.user.id).await {
+        Ok(()) => Ok(edit_page(&state, &u, &p, None, Some("decomp.dev import queued. It runs in the background; reload this page to follow it."), None).await),
         Err(e) => Ok(edit_page(&state, &u, &p, Some(&e), None, None).await),
     }
 }

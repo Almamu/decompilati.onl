@@ -189,7 +189,7 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
                 [pid],
                 |r| r.get(0),
             )?;
-            Ok((db::reports_for_project(c, pid, &v, 500)?, db::versions_for_project(c, pid)?, banned))
+            Ok((db::reports_for_project(c, pid, &v, 20_000)?, db::versions_for_project(c, pid)?, banned))
         })
         .await?;
     if owner_banned {
@@ -492,4 +492,58 @@ pub async fn sitemap(State(state): State<AppState>, headers: HeaderMap) -> AppRe
         Ok(CachedPage::new(xml, "application/xml; charset=utf-8"))
     })
     .await
+}
+
+/// Fallback for unknown paths: decomp.dev-style URLs (`/{owner}/{repo}`, optionally with a
+/// version, `.json` or `.svg`) redirect to the project registered for that repository, so
+/// links only need their domain changed. Anything else is a 404.
+pub async fn legacy_or_not_found(State(state): State<AppState>, uri: axum::http::Uri) -> AppResult<Response> {
+    let segments: Vec<&str> = uri.path().trim_matches('/').split('/').collect();
+    let (owner, repo, version) = match segments.as_slice() {
+        [owner, repo] => (*owner, *repo, None),
+        [owner, repo, version] => (*owner, *repo, Some(*version)),
+        _ => return Err(AppError::NotFound),
+    };
+    if crate::util::is_reserved_name(owner) {
+        return Err(AppError::NotFound);
+    }
+    // The extension sits on the last segment: /{owner}/{repo}.json or /{owner}/{repo}/{version}.svg
+    let last = version.unwrap_or(repo);
+    let (stem, ext) = match last.rsplit_once('.') {
+        Some((stem, ext @ ("json" | "svg" | "png"))) => (stem, Some(ext)),
+        _ => (last, None),
+    };
+    let (repo, version) = if version.is_some() { (repo, Some(stem)) } else { (stem, None) };
+    let full = format!("{owner}/{repo}");
+    let mut projects = state.db.run(move |c| db::projects_by_repo(c, &full)).await?;
+    projects.sort_by_key(|p| p.created_at);
+    let p = projects.into_iter().next().ok_or(AppError::NotFound)?;
+
+    let target = match ext {
+        Some("json") => format!("/projects/{}/progress.json", p.slug),
+        Some(_) => {
+            // decomp.dev shields: ?mode=shield&measure=code|data|functions|…
+            let measure = uri
+                .query()
+                .unwrap_or("")
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("measure="))
+                .unwrap_or("code");
+            match measure {
+                "data" | "matched_data" | "complete_data" => format!("/badge/{}/data.svg", p.slug),
+                "functions" | "matched_functions" => format!("/badge/{}/functions.svg", p.slug),
+                "fuzzy" | "fuzzy_match" => format!("/badge/{}.svg", p.slug),
+                _ => format!("/badge/{}/matching.svg", p.slug),
+            }
+        }
+        None => match version.filter(|v| crate::report::valid_version(v) && !v.is_empty() && *v != p.default_version) {
+            Some(v) => format!("/projects/{}/versions/{v}", p.slug),
+            None => format!("/projects/{}", p.slug),
+        },
+    };
+    Ok((
+        StatusCode::MOVED_PERMANENTLY,
+        [(header::LOCATION, target), (header::CACHE_CONTROL, "public, max-age=3600".to_string())],
+    )
+        .into_response())
 }

@@ -102,9 +102,6 @@ fn area_tooltip(a: &Area, unit: &str) -> String {
         fmt_pct(a.code.non_matching_pct()),
         fmt_count(a.code.total)
     );
-    if a.data.total > 0 {
-        let _ = write!(t, "\nData: {} ({} {unit})", fmt_pct(a.data.pct()), fmt_count(a.data.total));
-    }
     if a.functions.total > 0 {
         let _ = write!(t, "\nFunctions: {}/{} matching", fmt_count(a.functions.matching), fmt_count(a.functions.total));
     }
@@ -141,16 +138,12 @@ fn draw_area(out: &mut String, a: &Area, r: Rect, unit: &str, depth: usize) {
         draw_areas(out, &a.children, inner, unit, depth + 1);
     } else {
         let _ = write!(out, r#"<rect class="t-bg" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="2"/>"#, r.x, r.y, r.w, r.h);
-        // "Water level" fill from the bottom: matching, then non-matching on top.
-        let (m, n, class) = if a.code.total > 0 {
-            (a.code.matching_pct() / 100.0, a.code.non_matching_pct() / 100.0, "t-match")
-        } else {
-            (a.data.pct() / 100.0, 0.0, "t-data")
-        };
+        // The map shows code only: matching from the bottom, then non-matching on top.
+        let (m, n) = (a.code.matching_pct() / 100.0, a.code.non_matching_pct() / 100.0);
         let mh = r.h * m;
         let nh = r.h * n;
         if mh > 0.0 {
-            let _ = write!(out, r#"<rect class="{class}" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#, r.x, r.y + r.h - mh, r.w, mh);
+            let _ = write!(out, r#"<rect class="t-match" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#, r.x, r.y + r.h - mh, r.w, mh);
         }
         if nh > 0.0 {
             let _ = write!(out, r#"<rect class="t-nonmatch" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#, r.x, r.y + r.h - mh - nh, r.w, nh);
@@ -158,7 +151,7 @@ fn draw_area(out: &mut String, a: &Area, r: Rect, unit: &str, depth: usize) {
         if r.h > 30.0
             && let Some(label) = fit_text(&a.name, r.w, 7.2) {
                 let _ = write!(out, r#"<text class="t-label" x="{:.1}" y="{:.1}">{}</text>"#, r.x + 5.0, r.y + 15.0, esc(&label));
-                let pct = if a.code.total > 0 { a.code.decompiled_pct() } else { a.data.pct() };
+                let pct = a.code.decompiled_pct();
                 let _ = write!(out, r#"<text class="t-pct" x="{:.1}" y="{:.1}">{}</text>"#, r.x + 5.0, r.y + 29.0, fmt_pct(pct));
             }
     }
@@ -177,7 +170,23 @@ pub fn treemap(areas: &[Area], unit: &str) -> String {
 }
 
 /// Line chart of matching %, decompiled % and data % over time.
-pub fn history(rows: &[ReportRow]) -> String {
+/// At most this many points are drawn; longer histories are thinned out evenly.
+const MAX_POINTS: usize = 600;
+
+/// Every `n`-th report, always keeping the first and the last.
+fn thin(rows: &[ReportRow]) -> Vec<&ReportRow> {
+    if rows.len() <= MAX_POINTS {
+        return rows.iter().collect();
+    }
+    let step = rows.len() as f64 / (MAX_POINTS - 1) as f64;
+    let mut out: Vec<&ReportRow> = (0..MAX_POINTS - 1).map(|i| &rows[(i as f64 * step) as usize]).collect();
+    out.push(rows.last().unwrap());
+    out
+}
+
+pub fn history(all_rows: &[ReportRow]) -> String {
+    let rows = thin(all_rows);
+    let rows = rows.as_slice();
     const W: f64 = 800.0;
     const H: f64 = 240.0;
     const L: f64 = 40.0;

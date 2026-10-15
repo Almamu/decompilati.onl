@@ -142,6 +142,17 @@ pub fn card_grid(projects: &[&Project]) -> Markup {
     }
 }
 
+/// Legend for the area map, which only shows code.
+pub fn legend_code() -> Markup {
+    html! {
+        ul.legend {
+            li { span.sw.matching {} "Matching" }
+            li { span.sw.nonmatching {} "Non-matching" }
+            li { span.sw.none {} "Not decompiled" }
+        }
+    }
+}
+
 pub fn legend() -> Markup {
     html! {
         ul.legend {

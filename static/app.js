@@ -167,9 +167,33 @@
     });
   }
 
+  // Area table: rows inside an area start hidden; the toggle shows its direct children,
+  // and hiding them again also hides anything opened below them.
+  function initAreaToggles() {
+    document.querySelectorAll("button.toggle[data-toggle]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.dataset.toggle, table = btn.closest("table");
+        var open = btn.getAttribute("aria-expanded") !== "true";
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        btn.textContent = open ? "▾" : "▸";
+        table.querySelectorAll("tr[data-parent]").forEach(function (row) {
+          var parent = row.dataset.parent;
+          if (open && parent === id) {
+            row.hidden = false;
+          } else if (!open && (parent === id || parent.indexOf(id + "-") === 0)) {
+            row.hidden = true;
+            var t = row.querySelector("button.toggle");
+            if (t) { t.setAttribute("aria-expanded", "false"); t.textContent = "▸"; }
+          }
+        });
+      });
+    });
+  }
+
   function init() {
     relTimes();
     initCharts();
+    initAreaToggles();
     // Only logged-in visitors (who carry the "li" hint cookie) need to hit the origin.
     if (!/(?:^|;\s*)li=1/.test(document.cookie)) { initVotes(null); return; }
     fetch("/api/me", { credentials: "same-origin" })

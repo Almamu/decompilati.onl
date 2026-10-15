@@ -142,3 +142,15 @@ pub fn parse_timestamp(s: &str) -> Option<i64> {
             .map(|t| t.unix_timestamp())
     })
 }
+
+/// First path segments used by the site itself. decomp.dev-style `/{owner}/{repo}` URLs are
+/// redirected to projects, so GitHub accounts with these names can't use the site.
+pub const RESERVED_NAMES: &[&str] = &[
+    "p", "project", "projects", "platform", "platforms", "docs", "doc", "dashboard", "admin", "auth", "api",
+    "static", "uploads", "badge", "badges", "feed.xml", "robots.txt", "sitemap.xml", "favicon.ico", "login",
+    "logout", "new", "about", "help", "settings", "user", "users",
+];
+
+pub fn is_reserved_name(name: &str) -> bool {
+    RESERVED_NAMES.iter().any(|r| r.eq_ignore_ascii_case(name))
+}

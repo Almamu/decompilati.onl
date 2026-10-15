@@ -261,6 +261,12 @@ pub async fn callback(State(state): State<AppState>, headers: HeaderMap, Query(q
         .json()
         .await?;
 
+    if crate::util::is_reserved_name(&gh.login) {
+        return Err(AppError::Forbidden(format!(
+            "The GitHub account name \"{}\" is reserved for this site's own pages, so it can't be used to log in.",
+            gh.login
+        )));
+    }
     let session = random_token();
     let session_hash = sha256_hex(&session);
     let user = state
