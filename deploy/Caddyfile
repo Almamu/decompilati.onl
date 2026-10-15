@@ -1,0 +1,7 @@
+# TLS between Cloudflare and the VPS uses a Cloudflare Origin Certificate
+# (SSL/TLS mode "Full (strict)"). Download it from the Cloudflare dashboard.
+decompilati.onl {
+	tls /etc/caddy/origin.pem /etc/caddy/origin.key
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

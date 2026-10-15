@@ -1,0 +1,170 @@
+use maud::{html, Markup, PreEscaped};
+
+use crate::{
+    db::{Project, ReportRow},
+    platforms,
+    report::{Area, Layout},
+    util::{fmt_count, fmt_delta, fmt_pct},
+    views::{
+        components::{ai_badge, code_bar, cover, data_bar, last_change, legend, platform_chip, vote},
+        layout::time_ago,
+        svg,
+    },
+};
+
+fn is_commit_hash(s: &str) -> bool {
+    (7..=40).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_votes: bool) -> Markup {
+    let plat = platforms::get_or_other(&p.platform);
+    let areas = p.areas();
+    html! {
+        @if hidden_by_votes || p.hidden {
+            div.notice { "This project is hidden from listings because of its community rating or moderation." }
+        }
+        section.project-head {
+            div.project-cover { (cover(p, true)) }
+            div.project-info {
+                div.card-head {
+                    (platform_chip(&p.platform))
+                    span.muted { (plat.name) }
+                    @if p.ai_generated { (ai_badge()) }
+                }
+                h1 { (p.name) }
+                p.links {
+                    a href={ "https://github.com/" (p.repo) } rel="noopener" { "github.com/" (p.repo) }
+                    @if let Some(w) = &p.website { " · " a href=(w) rel="noopener nofollow ugc" { "Website" } }
+                    " · by " a href={ "https://github.com/" (p.owner_login) } rel="noopener" { "@" (p.owner_login) }
+                }
+                @if !p.description.is_empty() { p.desc.pre { (p.description) } }
+                (vote(p))
+            }
+        }
+
+        section.panel {
+            div.stats {
+                div.stat {
+                    h2 { "Code" }
+                    (code_bar(&p.code))
+                    dl {
+                        div { dt { span.sw.matching {} "Matching" } dd { (fmt_pct(p.code.matching_pct())) } }
+                        div { dt { span.sw.nonmatching {} "Non-matching" } dd { (fmt_pct(p.code.non_matching_pct())) } }
+                        div { dt { span.sw.none {} "Not decompiled" } dd { (fmt_pct(100.0 - p.code.decompiled_pct())) } }
+                        div { dt { "Total" } dd { (fmt_count(p.code.total)) " " (p.unit) } }
+                    }
+                }
+                @if p.data.total > 0 {
+                    div.stat {
+                        h2 { "Data" }
+                        (data_bar(&p.data))
+                        dl {
+                            div { dt { span.sw.data {} "Decompiled" } dd { (fmt_pct(p.data.pct())) } }
+                            div { dt { "Total" } dd { (fmt_count(p.data.total)) " " (p.unit) } }
+                        }
+                    }
+                }
+            }
+            (last_change(p))
+        }
+
+        @if !areas.is_empty() {
+            section.panel {
+                h2 { "Areas" }
+                (legend())
+                @match p.layout {
+                    Layout::Treemap => div.treemap-wrap { (PreEscaped(svg::treemap(&areas, &p.unit))) },
+                    Layout::Grid => div.area-grid { @for a in &areas { (area_tile(a)) } },
+                }
+                details.area-table {
+                    summary { "All areas as a table" }
+                    table {
+                        thead { tr { th { "Area" } th { "Matching" } th { "Non-matching" } th { "Data" } th.num { "Size (" (p.unit) ")" } } }
+                        tbody { @for a in &areas { (area_rows(a, 0)) } }
+                    }
+                }
+            }
+        }
+
+        @if reports.len() >= 2 {
+            section.panel {
+                h2 { "History" }
+                div.history-legend {
+                    span { span.sw.decomp {} "Decompiled" }
+                    span { span.sw.matching {} "Matching" }
+                    @if p.data.total > 0 { span { span.sw.data {} "Data" } }
+                }
+                (PreEscaped(svg::history(reports)))
+            }
+        }
+
+        @if !reports.is_empty() {
+            section.panel {
+                h2 { "Recent reports" }
+                table.reports {
+                    thead { tr { th { "When" } th { "Code" } th { "Matching" } th { "Data" } th { "Commit" } } }
+                    tbody {
+                        @for (i, r) in reports.iter().enumerate().rev().take(15) {
+                            @let prev = if i > 0 { reports.get(i - 1) } else { None };
+                            tr {
+                                td { (time_ago(r.created_at)) }
+                                td {
+                                    (fmt_pct(r.code.decompiled_pct()))
+                                    @if let Some(prev) = prev {
+                                        " " span.delta.small { (fmt_delta(r.code.decompiled_pct() - prev.code.decompiled_pct())) }
+                                    }
+                                }
+                                td { (fmt_pct(r.code.matching_pct())) }
+                                td { @if r.data.total > 0 { (fmt_pct(r.data.pct())) } @else { "—" } }
+                                td.commit {
+                                    @if let Some(c) = &r.commit {
+                                        @if is_commit_hash(c) {
+                                            a href={ "https://github.com/" (p.repo) "/commit/" (c) } rel="noopener" { code { (&c[..7.min(c.len())]) } }
+                                        } @else { code { (c) } }
+                                    }
+                                    @if let Some(m) = &r.message { " " span.muted { (m) } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        section.panel {
+            h2 { "Badge" }
+            p { img src={ "/badge/" (p.slug) ".svg" } alt="progress badge" height="20"; }
+            pre.code { "[![Decompilation progress](" (base_url) "/badge/" (p.slug) ".svg)](" (base_url) "/p/" (p.slug) ")" }
+        }
+    }
+}
+
+fn area_tile(a: &Area) -> Markup {
+    html! {
+        div.area-tile title=(a.description.as_deref().unwrap_or("")) {
+            div.area-name { (a.name) span.pval { (fmt_pct(a.code.decompiled_pct())) } }
+            (code_bar(&a.code))
+            @if a.data.total > 0 { (data_bar(&a.data)) }
+            @if !a.children.is_empty() {
+                ul.area-children {
+                    @for c in &a.children {
+                        li { span { (c.name) } span.muted { (fmt_pct(c.code.decompiled_pct())) } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn area_rows(a: &Area, depth: usize) -> Markup {
+    html! {
+        tr {
+            td style={ "padding-left:" (0.5 + depth as f64 * 1.2) "em" } { (a.name) }
+            td { (fmt_pct(a.code.matching_pct())) }
+            td { (fmt_pct(a.code.non_matching_pct())) }
+            td { @if a.data.total > 0 { (fmt_pct(a.data.pct())) } @else { "—" } }
+            td.num { (fmt_count(a.code.total)) }
+        }
+        @for c in &a.children { (area_rows(c, depth + 1)) }
+    }
+}
