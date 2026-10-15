@@ -62,17 +62,6 @@ pub fn valid_slug(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
-/// Validates a GitHub `owner/name` string.
-pub fn valid_repo(s: &str) -> bool {
-    let mut parts = s.split('/');
-    let ok = |p: Option<&str>| {
-        p.is_some_and(|p| {
-            !p.is_empty() && p.len() <= 100 && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        })
-    };
-    ok(parts.next()) && ok(parts.next()) && parts.next().is_none()
-}
-
 /// Accepts only http(s) URLs so user content can never produce `javascript:` links.
 pub fn clean_url(s: &str) -> Option<String> {
     let s = s.trim();
@@ -140,8 +129,6 @@ mod tests {
         assert_eq!(slugify("Pokémon Émerald"), "pokemon-emerald");
         assert!(valid_slug("sm64"));
         assert!(!valid_slug("-bad"));
-        assert!(valid_repo("zeldaret/oot"));
-        assert!(!valid_repo("zeldaret/oot/x"));
         assert_eq!(fmt_count(1234567), "1,234,567");
     }
 }

@@ -16,6 +16,8 @@ pub struct AppState {
     pub cache: Arc<PageCache>,
     pub http: reqwest::Client,
     pub limiter: Arc<RateLimiter>,
+    /// Per-user cache of pushable GitHub repos: user id -> (fetched at, repos).
+    pub repo_cache: Arc<Mutex<HashMap<i64, (i64, Vec<String>)>>>,
 }
 
 impl AppState {
@@ -25,7 +27,14 @@ impl AppState {
             .timeout(Duration::from_secs(15))
             .user_agent("decompsite (+https://github.com)")
             .build()?;
-        Ok(AppState { config: Arc::new(config), db, cache, http, limiter: Arc::new(RateLimiter::default()) })
+        Ok(AppState {
+            config: Arc::new(config),
+            db,
+            cache,
+            http,
+            limiter: Arc::new(RateLimiter::default()),
+            repo_cache: Arc::default(),
+        })
     }
 }
 

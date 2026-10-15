@@ -65,6 +65,8 @@ form.inline { display: inline; }
 .form { display: grid; gap: 14px; }
 .form label { display: grid; gap: 6px; font-weight: 600; }
 .form label .muted { font-weight: 400; }
+.form .hint { font-size: .85rem; }
+.form label .notice { font-weight: 400; margin: 0; }
 .form label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
 input[type=text], input[type=url], select, textarea {
   width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);

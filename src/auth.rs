@@ -308,29 +308,55 @@ struct RepoPermissions {
     push: bool,
 }
 
-/// Checks the logged-in user can push to `repo` on GitHub, returning its canonical `owner/name`.
-pub async fn verify_repo_access(state: &AppState, user: &SessionUser, repo: &str) -> Result<String, String> {
-    let res = state
-        .http
-        .get(format!("https://api.github.com/repos/{repo}"))
-        .bearer_auth(&user.gh_token)
-        .header(header::ACCEPT, "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|_| "Could not reach GitHub, please try again.".to_string())?;
-    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("Your GitHub session expired. Please log out and in again.".into());
+pub enum RepoListError {
+    /// The stored GitHub token is no longer valid; the user must log in again.
+    Expired,
+    Failed,
+}
+
+/// Public repositories the user can push to (`owner/name`), sorted by most recently pushed.
+/// Cached per user for a few minutes so form re-renders don't hit GitHub every time.
+pub async fn pushable_repos(state: &AppState, user: &SessionUser) -> Result<Vec<String>, RepoListError> {
+    const TTL: i64 = 300;
+    let now = crate::util::now();
+    if let Some((at, repos)) = state.repo_cache.lock().get(&user.user.id) {
+        if now - at < TTL {
+            return Ok(repos.clone());
+        }
     }
-    if !res.status().is_success() {
-        return Err(format!("Repository {repo} was not found on GitHub (it must be public)."));
+    let mut repos = Vec::new();
+    for page in 1..=10 {
+        let res = state
+            .http
+            .get("https://api.github.com/user/repos")
+            .query(&[
+                ("affiliation", "owner,collaborator,organization_member"),
+                ("sort", "pushed"),
+                ("per_page", "100"),
+                ("page", &page.to_string()),
+            ])
+            .bearer_auth(&user.gh_token)
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|_| RepoListError::Failed)?;
+        if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(RepoListError::Expired);
+        }
+        let batch: Vec<RepoInfo> = res.error_for_status().map_err(|_| RepoListError::Failed)?.json().await.map_err(|_| RepoListError::Failed)?;
+        let done = batch.len() < 100;
+        repos.extend(
+            batch
+                .into_iter()
+                .filter(|r| !r.private && r.permissions.as_ref().is_some_and(|p| p.admin || p.maintain || p.push))
+                .map(|r| r.full_name),
+        );
+        if done {
+            break;
+        }
     }
-    let info: RepoInfo = res.json().await.map_err(|_| "Unexpected response from GitHub.".to_string())?;
-    let perms = info.permissions.unwrap_or_default();
-    if info.private {
-        return Err("Only public repositories can be listed.".into());
-    }
-    if !(perms.admin || perms.maintain || perms.push || user.is_admin) {
-        return Err(format!("You need push access to {} to register it.", info.full_name));
-    }
-    Ok(info.full_name)
+    let mut cache = state.repo_cache.lock();
+    cache.retain(|_, (at, _)| now - *at < TTL);
+    cache.insert(user.user.id, (now, repos.clone()));
+    Ok(repos)
 }

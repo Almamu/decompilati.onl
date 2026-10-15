@@ -14,8 +14,6 @@ pub struct ProjectForm {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub slug: String,
-    #[serde(default)]
     pub platform: String,
     #[serde(default)]
     pub repo: String,
@@ -31,7 +29,6 @@ impl ProjectForm {
     pub fn from_project(p: &Project) -> Self {
         ProjectForm {
             name: p.name.clone(),
-            slug: p.slug.clone(),
             platform: p.platform.clone(),
             repo: p.repo.clone(),
             website: p.website.clone().unwrap_or_default(),
@@ -77,13 +74,48 @@ pub fn dashboard(u: &SessionUser, projects: &[Project]) -> Markup {
     }
 }
 
-fn form_fields(f: &ProjectForm) -> Markup {
+/// Repositories offered in the project form's dropdown.
+pub enum RepoOptions {
+    List(Vec<String>),
+    /// The GitHub token expired; the user has to log in again to refresh it.
+    Expired { next: String },
+    Failed,
+}
+
+fn repo_field(f: &ProjectForm, repos: &RepoOptions) -> Markup {
+    html! {
+        label { "GitHub repository " span.muted { "(public repositories you can push to)" }
+            @match repos {
+                RepoOptions::List(list) => {
+                    select name="repo" required {
+                        option value="" disabled selected[f.repo.is_empty()] { "Select a repository…" }
+                        // Keep the current repository selectable even if it's no longer in the list.
+                        @if !f.repo.is_empty() && !list.iter().any(|r| r.eq_ignore_ascii_case(&f.repo)) {
+                            option value=(f.repo) selected { (f.repo) }
+                        }
+                        @for r in list {
+                            option value=(r) selected[r.eq_ignore_ascii_case(&f.repo)] { (r) }
+                        }
+                    }
+                    @if list.is_empty() {
+                        span.muted.hint { "No public repositories with push access were found. Repositories in organizations only show up if the organization allows this app (" a href="https://github.com/settings/connections/applications" rel="noopener" { "GitHub settings" } ")." }
+                    }
+                }
+                RepoOptions::Expired { next } => {
+                    span.notice.err { "Your GitHub session has expired. " a href={ "/auth/github?next=" (crate::auth::urlencode(next)) } { "Log in again" } " to load your repositories." }
+                }
+                RepoOptions::Failed => {
+                    span.notice.err { "Couldn't load your repositories from GitHub. Please reload the page to try again." }
+                }
+            }
+        }
+    }
+}
+
+fn form_fields(f: &ProjectForm, repos: &RepoOptions) -> Markup {
     html! {
         label { "Game / project name"
             input type="text" name="name" value=(f.name) required maxlength="100" placeholder="Super Mario 64";
-        }
-        label { "URL slug " span.muted { "(optional, lowercase letters, digits and dashes)" }
-            input type="text" name="slug" value=(f.slug) maxlength="64" pattern="[a-z0-9][a-z0-9\\-]*[a-z0-9]" placeholder="sm64";
         }
         label { "Platform"
             select name="platform" required {
@@ -92,9 +124,7 @@ fn form_fields(f: &ProjectForm) -> Markup {
                 }
             }
         }
-        label { "GitHub repository " span.muted { "(owner/name — you need push access)" }
-            input type="text" name="repo" value=(f.repo) required maxlength="200" placeholder="n64decomp/sm64";
-        }
+        (repo_field(f, repos))
         label { "Website " span.muted { "(optional)" }
             input type="url" name="website" value=(f.website) maxlength="300" placeholder="https://";
         }
@@ -108,21 +138,32 @@ fn form_fields(f: &ProjectForm) -> Markup {
     }
 }
 
-pub fn new_project(f: &ProjectForm, error: Option<&str>) -> Markup {
+pub fn new_project(f: &ProjectForm, repos: &RepoOptions, error: Option<&str>) -> Markup {
     html! {
         section.narrow {
             p { a href="/dashboard" { "← Your projects" } }
             h1 { "Add a project" }
             @if let Some(e) = error { div.notice.err { (e) } }
             form.form method="post" action="/dashboard/new" {
-                (form_fields(f))
-                button.btn type="submit" { "Create project" }
+                (form_fields(f, repos))
+                p.muted { "The project's URL is generated from its name and stays the same if you rename it later." }
+                button.btn type="submit" disabled[!matches!(repos, RepoOptions::List(_))] { "Create project" }
             }
         }
     }
 }
 
-pub fn edit_project(u: &SessionUser, p: &Project, f: &ProjectForm, error: Option<&str>, notice: Option<&str>, new_key: Option<&str>, base_url: &str) -> Markup {
+#[allow(clippy::too_many_arguments)]
+pub fn edit_project(
+    u: &SessionUser,
+    p: &Project,
+    f: &ProjectForm,
+    repos: &RepoOptions,
+    error: Option<&str>,
+    notice: Option<&str>,
+    new_key: Option<&str>,
+    base_url: &str,
+) -> Markup {
     html! {
         section.narrow {
             p { a href="/dashboard" { "← Your projects" } " · " a href={ "/p/" (p.slug) } { "View public page" } }
@@ -140,8 +181,9 @@ pub fn edit_project(u: &SessionUser, p: &Project, f: &ProjectForm, error: Option
 
             div.panel {
                 h2 { "Details" }
+                p.muted { "Public URL: " a href={ "/p/" (p.slug) } { (base_url) "/p/" (p.slug) } }
                 form.form method="post" action={ "/dashboard/p/" (p.id) } {
-                    (form_fields(f))
+                    (form_fields(f, repos))
                     button.btn type="submit" { "Save changes" }
                 }
             }
