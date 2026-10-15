@@ -321,3 +321,27 @@ section > .search { margin: 0 0 12px; }
 @media (prefers-color-scheme: dark) { .btn-github { background: #f0f3f6; color: #1f2328; } }
 .btn-rss { display: inline-flex; align-items: center; gap: 8px; background: #ee802f; color: #fff; }
 .home-tools .btn-rss { padding: 10px 14px; }
+/* Header: links inline on wide screens; on small ones they fold into a menu (CSS-only toggle). */
+.header-bar { flex-wrap: nowrap; }
+.header-bar .logo { margin-right: auto; white-space: nowrap; }
+.btn-login { display: inline-flex; align-items: center; gap: 6px; }
+.menu-check { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.menu-toggle { display: none; }
+#auth-menu { display: none; }
+@media (max-width: 760px) {
+  header.site .wrap.header-bar { flex-wrap: wrap; gap: 8px; min-height: 0; padding-top: 9px; padding-bottom: 9px; }
+  #auth { order: 2; }
+  #auth .label, #auth .desktop-only { display: none; }
+  .btn-login { padding: 7px 9px; }
+  .menu-toggle { order: 3; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 34px;
+    border: 1px solid var(--line); border-radius: 8px; color: var(--text); cursor: pointer; }
+  .menu-check:focus-visible ~ .menu-toggle { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .menu-check:checked ~ .menu-toggle { background: var(--panel); }
+  #site-menu { order: 4; flex-basis: 100%; display: none; flex-direction: column; align-items: stretch; gap: 0;
+    padding: 4px 0 8px; border-top: 1px solid var(--line); font-size: 1rem; }
+  .menu-check:checked ~ #site-menu { display: flex; }
+  #site-menu a, .menu-logout { display: block; padding: 10px 4px; color: var(--text); }
+  #site-menu > a + a, #auth-menu a, #auth-menu form { border-top: 1px solid var(--line); }
+  #auth-menu { display: flex; flex-direction: column; }
+  .menu-logout { width: 100%; text-align: left; background: none; border: 0; font: inherit; cursor: pointer; }
+}

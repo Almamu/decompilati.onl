@@ -37,13 +37,22 @@
     var auth = document.getElementById("auth");
     if (!auth) return;
     auth.textContent = "";
-    var dash = el("a", { href: "/dashboard", class: "user" });
-    if (user.avatar_url) dash.appendChild(el("img", { src: user.avatar_url + "&s=48", alt: "", width: "24", height: "24" }));
-    dash.appendChild(document.createTextNode(user.login));
+    var dash = el("a", { href: "/dashboard", class: "user", title: "Your projects" });
+    if (user.avatar_url) dash.appendChild(el("img", { src: user.avatar_url + "&s=48", alt: user.login, width: "24", height: "24" }));
+    dash.appendChild(el("span", { class: "label" }, user.login));
     auth.appendChild(dash);
-    var form = el("form", { method: "post", action: "/auth/logout", class: "inline" });
+    var form = el("form", { method: "post", action: "/auth/logout", class: "inline desktop-only" });
     form.appendChild(el("button", { type: "submit", class: "btn btn-small btn-ghost" }, "Log out"));
     auth.appendChild(form);
+    // On small screens these live in the menu instead.
+    var menu = document.getElementById("auth-menu");
+    if (menu) {
+      menu.textContent = "";
+      menu.appendChild(el("a", { href: "/dashboard" }, "Your projects"));
+      var menuForm = el("form", { method: "post", action: "/auth/logout" });
+      menuForm.appendChild(el("button", { type: "submit", class: "menu-logout" }, "Log out"));
+      menu.appendChild(menuForm);
+    }
   }
 
   // Explains a failed vote right under the widget, so it's clear why it didn't count.

@@ -7,6 +7,8 @@ use crate::assets;
 
 pub const SITE_NAME: &str = "decompilati.onl";
 
+const MENU_ICON: &str = r#"<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>"#;
+
 static BASE_URL: OnceLock<String> = OnceLock::new();
 
 /// Set once at startup; used for canonical URLs and other absolute links in page heads.
@@ -88,14 +90,23 @@ pub fn render(p: Page) -> String {
             }
             body {
                 header.site {
-                    div.wrap {
+                    // On small screens the links fold into a menu opened by the checkbox's label
+                    // (CSS only, so it works without JavaScript); the login stays visible.
+                    div.wrap.header-bar {
                         a.logo href="/" { span.logo-mark { "▚" } " decompilati" span.dim { ".onl" } }
-                        nav {
+                        input #menu-check.menu-check type="checkbox" aria-label="Show the menu" aria-controls="site-menu";
+                        nav #site-menu {
                             a href="/platforms" { "Platforms" }
                             a href="/docs" { "Docs" }
-                            span #auth {
-                                a.btn.btn-small href="/auth/github" { "Log in with GitHub" }
+                            span #auth-menu {}
+                        }
+                        span #auth {
+                            a.btn.btn-small.btn-login href="/auth/github" aria-label="Log in with GitHub" title="Log in with GitHub" {
+                                (crate::views::components::icon_github()) span.label { "Log in with GitHub" }
                             }
+                        }
+                        label.menu-toggle for="menu-check" aria-hidden="true" title="Menu" {
+                            (PreEscaped(MENU_ICON))
                         }
                     }
                 }
