@@ -14,7 +14,7 @@ use axum::{
 };
 use bytes::Bytes;
 use parking_lot::RwLock;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::util::sha256_hex;
@@ -33,9 +33,15 @@ impl CachedPage {
     }
 }
 
+/// Paths to purge from the edge, and who to tell once that's done.
+struct Purge {
+    paths: Vec<String>,
+    done: Option<oneshot::Sender<()>>,
+}
+
 pub struct PageCache {
     pages: RwLock<HashMap<String, Arc<CachedPage>>>,
-    purge_tx: mpsc::UnboundedSender<String>,
+    purge_tx: mpsc::UnboundedSender<Purge>,
     /// Edge TTL. Long when we can purge Cloudflare, short otherwise.
     edge_ttl: u64,
 }
@@ -65,28 +71,49 @@ impl PageCache {
         pages.insert(key, page);
     }
 
-    /// Drops the given paths from the local cache and queues them for an edge purge.
+    /// Drops the given paths from the local cache and queues them for an edge purge, which
+    /// is batched with others arriving shortly after.
     pub fn invalidate<I, S>(&self, paths: I)
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        let paths = self.drop_local(paths);
+        let _ = self.purge_tx.send(Purge { paths, done: None });
+    }
+
+    /// Like `invalidate`, but purges right away and returns once the edge has been purged, so
+    /// the person who made the change sees it on their next page load.
+    pub async fn invalidate_now<I, S>(&self, paths: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let paths = self.drop_local(paths);
+        let (tx, rx) = oneshot::channel();
+        if self.purge_tx.send(Purge { paths, done: Some(tx) }).is_ok() {
+            let _ = tokio::time::timeout(Duration::from_secs(15), rx).await;
+        }
+    }
+
+    fn drop_local<I, S>(&self, paths: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         let paths: Vec<String> = paths.into_iter().map(Into::into).collect();
-        {
-            let mut pages = self.pages.write();
-            for p in &paths {
-                pages.remove(p);
-            }
+        let mut pages = self.pages.write();
+        for p in &paths {
+            pages.remove(p);
         }
-        for p in paths {
-            let _ = self.purge_tx.send(p);
-        }
+        paths
     }
 
     /// Builds the response for a cached page, honouring `If-None-Match`.
     pub fn respond(&self, page: &CachedPage, req_headers: &HeaderMap) -> Response {
+        // Browsers revalidate every time (a cheap 304 from the edge), so a purge is seen at once.
         let cache_control = format!(
-            "public, max-age=60, s-maxage={}, stale-while-revalidate=60, stale-if-error=86400",
+            "public, max-age=0, must-revalidate, s-maxage={}, stale-if-error=86400",
             self.edge_ttl
         );
         let not_modified = req_headers
@@ -130,18 +157,31 @@ pub fn project_paths(slug: &str, platform: &str) -> Vec<String> {
     ]
 }
 
-async fn purge_worker(config: Config, mut rx: mpsc::UnboundedReceiver<String>) {
+async fn purge_worker(config: Config, mut rx: mpsc::UnboundedReceiver<Purge>) {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent("decompsite-cache-warmer")
         .build()
         .expect("http client");
     while let Some(first) = rx.recv().await {
-        // Collect everything that arrives during the debounce window into one batch.
-        tokio::time::sleep(Duration::from_secs(config.purge_debounce_secs)).await;
-        let mut paths = BTreeSet::from([first]);
-        while let Ok(p) = rx.try_recv() {
-            paths.insert(p);
+        // Collect everything that arrives during the debounce window into one batch. Someone
+        // waiting for the purge ends the window early.
+        let mut waiters = Vec::new();
+        let mut paths = BTreeSet::new();
+        let mut take = |m: Purge, waiters: &mut Vec<oneshot::Sender<()>>| {
+            paths.extend(m.paths);
+            waiters.extend(m.done);
+        };
+        take(first, &mut waiters);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(config.purge_debounce_secs);
+        while waiters.is_empty() {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(m)) => take(m, &mut waiters),
+                _ => break,
+            }
+        }
+        while let Ok(m) = rx.try_recv() {
+            take(m, &mut waiters);
         }
         let Some(cf) = &config.cloudflare else {
             tracing::debug!("cloudflare not configured; skipping purge of {} paths", paths.len());
@@ -172,6 +212,8 @@ async fn purge_worker(config: Config, mut rx: mpsc::UnboundedReceiver<String>) {
             }
         }
         tracing::info!(count = urls.len(), ok = purged_ok, "purged cloudflare cache");
+        // Done (or failed): release whoever is waiting.
+        drop(waiters);
         if !purged_ok {
             continue;
         }

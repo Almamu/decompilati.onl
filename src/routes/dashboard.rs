@@ -215,7 +215,7 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
         })
         .await?
         .ok_or(AppError::NotFound)?;
-    state.cache.invalidate(membership_paths(&project.slug, &project.platform));
+    state.cache.invalidate_now(membership_paths(&project.slug, &project.platform)).await;
     // A repository can hold several games: if another project already uses this one, the
     // GitHub App doesn't import its artifacts here until the owner picks which ones.
     let pid = project.id;
@@ -286,9 +286,10 @@ pub async fn update(State(state): State<AppState>, RequireUser(u): RequireUser, 
     let updated = updated.ok_or(AppError::NotFound)?;
     // The platform may have changed, so both the old and new listing pages are affected; the
     // version pages show which version is the default.
-    state.cache.invalidate(membership_paths(&p.slug, &p.platform));
-    state.cache.invalidate(membership_paths(&updated.slug, &updated.platform));
-    state.cache.invalidate(versions.iter().map(|v| crate::util::version_page(&updated.slug, v)));
+    let mut paths = membership_paths(&p.slug, &p.platform);
+    paths.extend(membership_paths(&updated.slug, &updated.platform));
+    paths.extend(versions.iter().map(|v| crate::util::version_page(&updated.slug, v)));
+    state.cache.invalidate_now(paths).await;
     Ok(edit_page(&state, &u, &updated, None, Some("Saved."), None).await)
 }
 
@@ -318,7 +319,7 @@ pub async fn upload_image(State(state): State<AppState>, RequireUser(u): Require
                 .await?
                 .ok_or(AppError::NotFound)?;
             remove_old_image(&state, p.image.as_deref(), &name).await;
-            state.cache.invalidate(membership_paths(&p.slug, &p.platform));
+            state.cache.invalidate_now(membership_paths(&p.slug, &p.platform)).await;
             Ok(edit_page(&state, &u, &updated, None, Some("Image updated."), None).await)
         }
     }
@@ -364,7 +365,7 @@ pub async fn delete(State(state): State<AppState>, RequireUser(u): RequireUser, 
     }
     state.db.run(move |c| db::delete_project(c, id)).await?;
     remove_old_image(&state, p.image.as_deref(), "").await;
-    state.cache.invalidate(membership_paths(&p.slug, &p.platform));
+    state.cache.invalidate_now(membership_paths(&p.slug, &p.platform)).await;
     Ok(Redirect::to("/dashboard").into_response())
 }
 
@@ -382,7 +383,7 @@ async fn toggle(state: &AppState, id: i64, f: fn(&mut db::Conn, i64, bool) -> an
     let p = state.db.run(move |c| db::project_by_id(c, id)).await?.ok_or(AppError::NotFound)?;
     let on = !get(&p);
     state.db.run(move |c| f(c, id, on)).await?;
-    state.cache.invalidate(membership_paths(&p.slug, &p.platform));
+    state.cache.invalidate_now(membership_paths(&p.slug, &p.platform)).await;
     Ok(Redirect::to("/admin").into_response())
 }
 
@@ -403,9 +404,7 @@ pub async fn admin_ban(State(state): State<AppState>, RequireAdmin(_u): RequireA
             db::projects_by_owner(c, uid)
         })
         .await?;
-    for p in projects {
-        state.cache.invalidate(membership_paths(&p.slug, &p.platform));
-    }
+    state.cache.invalidate_now(projects.iter().flat_map(|p| membership_paths(&p.slug, &p.platform))).await;
     Ok(Redirect::to("/admin").into_response())
 }
 
@@ -475,8 +474,7 @@ pub async fn merge_versions(
     let Some(updated) = updated else {
         return Ok(edit_page(&state, &u, &p, Some("That version no longer exists."), None, None).await);
     };
-    state.cache.invalidate(version_paths(&p.slug, &p.platform, &from));
-    state.cache.invalidate(version_paths(&p.slug, &p.platform, &into));
+    state.cache.invalidate_now(version_paths(&p.slug, &p.platform, &from).into_iter().chain(version_paths(&p.slug, &p.platform, &into))).await;
     let name = |v: &str| if v.is_empty() { "(unnamed)".to_string() } else { v.to_string() };
     let notice = if existed {
         format!("Merged {} into {}.", name(&from), into)
