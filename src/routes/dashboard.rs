@@ -295,7 +295,7 @@ async fn remove_old_image(state: &AppState, old: Option<&str>, new: &str) {
         let o = old.to_string();
         let still_used: bool = state
             .db
-            .run(move |c| Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE image = ?1)", [&o], |r| r.get(0))?))
+            .run(move |c| db::image_in_use(c, &o))
             .await
             .unwrap_or(true);
         if !still_used {
@@ -344,7 +344,7 @@ pub async fn admin(State(state): State<AppState>, RequireAdmin(_u): RequireAdmin
     Ok(page("Admin", views::dashboard::admin(&projects, &users, &jobs)))
 }
 
-async fn toggle(state: &AppState, id: i64, f: fn(&db::Conn, i64, bool) -> anyhow::Result<()>, get: fn(&Project) -> bool) -> AppResult<Response> {
+async fn toggle(state: &AppState, id: i64, f: fn(&mut db::Conn, i64, bool) -> anyhow::Result<()>, get: fn(&Project) -> bool) -> AppResult<Response> {
     let p = state.db.run(move |c| db::project_by_id(c, id)).await?.ok_or(AppError::NotFound)?;
     let on = !get(&p);
     state.db.run(move |c| f(c, id, on)).await?;
@@ -364,7 +364,7 @@ pub async fn admin_ban(State(state): State<AppState>, RequireAdmin(_u): RequireA
     let projects = state
         .db
         .run(move |c| {
-            let banned: bool = c.query_row("SELECT is_banned FROM users WHERE id = ?1", [uid], |r| r.get(0))?;
+            let banned = db::is_banned(c, uid)?;
             db::set_banned(c, uid, !banned)?;
             db::projects_by_owner(c, uid)
         })

@@ -6,16 +6,22 @@ non-matching / not decompiled) and data progress, a map of the project's areas, 
 community votes, a highlights page, project search, and an AI badge for projects that say they're
 mainly AI-generated.
 
-It's a single Rust binary (axum + SQLite) with server-rendered HTML and SVG. Nothing depends on an
+It's a single Rust binary (axum + PostgreSQL) with server-rendered HTML and SVG. Nothing depends on an
 external service except GitHub (login) and Cloudflare (CDN).
 
 ## Running locally
 
+The app needs PostgreSQL (any recent version). It creates and migrates its tables itself.
+
 ```sh
-cp .env.example .env            # optional; defaults work for local use
+createdb decompsite             # as a user PostgreSQL trusts, e.g. your own via peer auth
+cp .env.example .env            # set DATABASE_URL if the default socket/user doesn't fit
 cargo run -- seed-demo          # optional: fake projects (prints their API keys)
 cargo run                       # http://localhost:8080
 ```
+
+Databases from before the PostgreSQL switch can be copied over once, into an empty database:
+`decompsite import-sqlite /path/to/decompsite.db`.
 
 Login needs a GitHub OAuth app whose callback URL is `$BASE_URL/auth/github/callback`.
 
@@ -27,7 +33,7 @@ and vote state) is filled in by `static/app.js` from `/api/me`. That call only h
 non-HttpOnly `li=1` hint cookie is present, so anonymous visitors never reach the origin.
 
 1. **Origin memory cache.** Rendered pages are kept in memory with an ETag, so a Cloudflare miss
-   doesn't touch SQLite. Conditional requests get a `304`.
+   doesn't touch the database. Conditional requests get a `304`.
 2. **Cloudflare edge.** Responses carry `Cache-Control: public, max-age=60, s-maxage=2592000`.
    When a report, edit, vote or moderation action changes a project, the affected URLs are queued.
    After `PURGE_DEBOUNCE_SECS` the queue is purged in batches of 30 URLs using the Cloudflare API
@@ -91,21 +97,24 @@ report, the server fetches the commits since the previous report from GitHub (se
 cargo build --release
 sudo install -m755 target/release/decompsite /usr/local/bin/
 sudo useradd --system --home /var/lib/decompsite decompsite
+sudo apt install postgresql                      # or any PostgreSQL server
+sudo -u postgres createuser decompsite           # peer auth: the decompsite OS user logs in as it
+sudo -u postgres createdb -O decompsite decompsite
 sudo install -m600 .env /etc/decompsite.env      # edit first
 sudo cp deploy/decompsite.service /etc/systemd/system/
 sudo systemctl enable --now decompsite
 ```
 
 Then put Caddy (`deploy/Caddyfile`) or nginx in front of it. A `Dockerfile` is also included.
-Back up `DATA_DIR` (SQLite in WAL mode plus `uploads/`). For example, run
-`sqlite3 decompsite.db ".backup backup.db"` from cron.
+Back up the database with `pg_dump` (for example `pg_dump -Fc decompsite > backup.dump` from cron)
+and `DATA_DIR/uploads/`.
 
 ## Layout
 
 ```
 src/main.rs          router, middleware, startup
 src/config.rs        environment configuration
-src/db.rs            schema/migrations and queries (SQLite, r2d2 pool)
+src/db.rs            schema/migrations and queries (PostgreSQL, r2d2 pool)
 src/report.rs        webhook report format, validation and roll-up
 src/cache.rs         in-memory page cache + Cloudflare purge/re-warm worker
 src/auth.rs          GitHub OAuth, sessions, CSRF origin check, repo access check

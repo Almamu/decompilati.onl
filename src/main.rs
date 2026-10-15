@@ -14,6 +14,7 @@ mod platforms;
 mod report;
 mod routes;
 mod seed;
+mod sqlite_import;
 mod util;
 mod views;
 
@@ -121,9 +122,22 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("CF_API_TOKEN / CF_ZONE_ID not set: edge cache purging is disabled (short edge TTLs are used)");
     }
     std::fs::create_dir_all(config.uploads_dir())?;
-    let db = db::Db::open(&config.database_path)?;
-    if std::env::args().nth(1).as_deref() == Some("seed-demo") {
-        return seed::run(&db, &config.uploads_dir());
+    // The PostgreSQL client is synchronous: open the pool and run CLI commands on a blocking
+    // thread (request handlers reach it through `Db::run`, which does the same).
+    let url = config.database_url.clone();
+    let db = tokio::task::spawn_blocking(move || db::Db::open(&url)).await??;
+    let command = std::env::args().nth(1);
+    if let Some(cmd @ ("import-sqlite" | "seed-demo")) = command.as_deref() {
+        let (db, uploads, arg) = (db.clone(), config.uploads_dir(), std::env::args().nth(2));
+        let cmd = cmd.to_string();
+        return tokio::task::spawn_blocking(move || match cmd.as_str() {
+            "import-sqlite" => {
+                let path = arg.ok_or_else(|| anyhow::anyhow!("usage: decompsite import-sqlite <file.db>"))?;
+                sqlite_import::run(&db, std::path::Path::new(&path))
+            }
+            _ => seed::run(&db, &uploads),
+        })
+        .await?;
     }
     views::layout::set_base_url(&config.base_url);
     let bind = config.bind;
@@ -137,7 +151,13 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("listening on http://{bind}");
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
+            // systemd stops services with SIGTERM; Ctrl-C covers running it by hand.
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            tracing::info!("shutting down");
         })
         .await?;
     Ok(())

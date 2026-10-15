@@ -17,8 +17,9 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 jsonwebtoken = "9"
 maud = "0.27.0"
 parking_lot = "0.12.5"
+postgres = "0.19"
 r2d2 = "0.8.10"
-r2d2_sqlite = "0.35.0"
+r2d2_postgres = "0.18"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "fallible_uint"] }

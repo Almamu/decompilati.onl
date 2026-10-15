@@ -23,11 +23,11 @@ const DEMO: &[(&str, &str, &str, bool)] = &[
 
 pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
     let mut c = db.conn()?;
-    let user = db::upsert_user(&c, 1, "demo-user", Some("Demo User"), None)?;
+    let user = db::upsert_user(&mut c, 1, "demo-user", Some("Demo User"), None)?;
     let mut rng = rand::thread_rng();
     for (name, platform, zone, ai) in DEMO {
         let slug = crate::util::slugify(name);
-        if db::project_by_slug(&c, &slug)?.is_some() {
+        if db::project_by_slug(&mut c, &slug)?.is_some() {
             continue;
         }
         let (key, hash, prefix) = new_api_key();
@@ -41,7 +41,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
             ai_generated: *ai,
         };
         let image = demo_cover(platform, uploads)?;
-        let id = db::insert_project(&c, user.id, &meta, &image, &hash, &prefix)?;
+        let id = db::insert_project(&mut c, user.id, &meta, &image, &hash, &prefix)?;
         println!("{slug}: {key}");
 
         // Several reports spread over the last 60 days, with progress going up.
@@ -94,7 +94,7 @@ pub fn run(db: &Db, uploads: &std::path::Path) -> anyhow::Result<()> {
             }
             .normalize()
             .map_err(anyhow::Error::msg)?;
-            let project = db::project_by_id(&c, id)?.unwrap();
+            let project = db::project_by_id(&mut c, id)?.unwrap();
             // Spread the reports over the past weeks so the history chart has a time axis.
             let ts = now() - (reports - i) as i64 * 5 * 86400 - rng.gen_range(0..86400);
             db::apply_report(&mut c, &project, &report, Some(ts))?;

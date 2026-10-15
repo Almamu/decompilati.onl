@@ -6,7 +6,8 @@ pub struct Config {
     pub bind: SocketAddr,
     /// Public base URL, without trailing slash (e.g. `https://decompilati.onl`).
     pub base_url: String,
-    pub database_path: PathBuf,
+    /// PostgreSQL connection string (libpq key=value or a postgres:// URL).
+    pub database_url: String,
     pub data_dir: PathBuf,
     pub github_client_id: String,
     pub github_client_secret: String,
@@ -60,9 +61,7 @@ impl Config {
             bind: var("BIND").unwrap_or_else(|| "127.0.0.1:8080".into()).parse()?,
             secure_cookies: base_url.starts_with("https://"),
             base_url,
-            database_path: var("DATABASE_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| data_dir.join("decompsite.db")),
+            database_url: var("DATABASE_URL").unwrap_or_else(|| "host=/run/postgresql dbname=decompsite".into()),
             data_dir,
             github_client_id: var("GITHUB_CLIENT_ID").unwrap_or_default(),
             github_client_secret: var("GITHUB_CLIENT_SECRET").unwrap_or_default(),

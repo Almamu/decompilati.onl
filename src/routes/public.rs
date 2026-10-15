@@ -163,11 +163,7 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
     let (reports, versions, owner_banned) = state
         .db
         .run(move |c| {
-            let banned: bool = c.query_row(
-                "SELECT u.is_banned FROM users u JOIN projects p ON p.owner_id = u.id WHERE p.id = ?1",
-                [pid],
-                |r| r.get(0),
-            )?;
+            let banned = db::owner_is_banned(c, pid)?;
             Ok((db::reports_for_project(c, pid, &v, 20_000)?, db::versions_for_project(c, pid)?, banned))
         })
         .await?;
