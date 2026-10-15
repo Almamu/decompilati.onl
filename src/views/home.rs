@@ -14,8 +14,7 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Pro
         section.hero {
             h1 { "Tracking the progress of game decompilation projects" }
             p.lead {
-                (total) " projects reverse-engineering games back into source code. "
-                "Progress is updated automatically by each project's CI."
+                (total) " projects reverse-engineering games back into source code."
             }
         }
 
@@ -45,8 +44,7 @@ pub fn home(spotlight: &[&Project], movers: &[(&Project, f64)], projects: &[&Pro
                 div {
                     h2 { "Community votes" }
                     p { "Logged-in users can upvote or downvote any project. "
-                        "Votes decide what gets featured: low-rated projects sink in the listings and are hidden past a threshold, so stalled, misleading or spam entries don't crowd out real work. "
-                        "Progress figures are reported by each project itself." }
+                        "Votes decide what gets featured: low-rated projects sink in the listings and are hidden past a threshold, so stalled, misleading or spam entries don't crowd out real work." }
                 }
             }
             (legend())

@@ -98,8 +98,14 @@ pub fn render(p: Page) -> String {
                 main.wrap { (p.body) }
                 footer.site {
                     div.wrap {
-                        p { "Progress is self-reported by each project via the " a href="/docs" { "webhook API" } ". "
-                            "Game names and images belong to their respective owners." }
+                        p {
+                            "Progress is reported and managed by each project. "
+                            "Game names and images belong to their respective owners."
+                        }
+                        p {
+                            a href="https://github.com/Almamu/decompilati.onl" rel="noopener" { "Source code on GitHub" }
+                            " · GPL-3.0"
+                        }
                     }
                 }
             }
