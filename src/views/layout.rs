@@ -29,6 +29,8 @@ pub struct Page<'a> {
     pub canonical: Option<String>,
     /// schema.org JSON-LD describing the page.
     pub json_ld: Option<serde_json::Value>,
+    /// Path of a page-specific RSS feed, announced next to the site-wide one.
+    pub feed: Option<String>,
     /// Open Graph type: `website` by default.
     pub og_type: Option<&'static str>,
 }
@@ -78,7 +80,10 @@ pub fn render(p: Page) -> String {
                 meta name="color-scheme" content="dark light";
                 link rel="icon" href=(assets::url("favicon.svg")) type="image/svg+xml";
                 link rel="stylesheet" href=(assets::url("app.css"));
-                link rel="alternate" type="application/rss+xml" title="Project updates" href="/feed.xml";
+                link rel="alternate" type="application/rss+xml" title="decompilati.onl: all progress updates" href="/feed.xml";
+                @if let Some(feed) = &p.feed {
+                    link rel="alternate" type="application/rss+xml" title={ (p.title) " progress updates" } href=(feed);
+                }
                 script src=(assets::url("app.js")) defer {}
             }
             body {
@@ -86,7 +91,6 @@ pub fn render(p: Page) -> String {
                     div.wrap {
                         a.logo href="/" { span.logo-mark { "▚" } " decompilati" span.dim { ".onl" } }
                         nav {
-                            a href="/projects" { "Projects" }
                             a href="/platforms" { "Platforms" }
                             a href="/docs" { "Docs" }
                             span #auth {

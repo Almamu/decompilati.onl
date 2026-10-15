@@ -96,7 +96,7 @@ fn fit_text(s: &str, width: f64, char_w: f64) -> Option<String> {
 
 fn area_tooltip(a: &Area, unit: &str) -> String {
     let mut t = format!(
-        "{}\nCode: {} matching, {} non-matching ({} {unit})",
+        "{}\nCode: {} matching, {} partially matching ({} {unit})",
         a.name,
         fmt_pct(a.code.matching_pct()),
         fmt_pct(a.code.non_matching_pct()),
@@ -138,7 +138,7 @@ fn draw_area(out: &mut String, a: &Area, r: Rect, unit: &str, depth: usize) {
         draw_areas(out, &a.children, inner, unit, depth + 1);
     } else {
         let _ = write!(out, r#"<rect class="t-bg" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="2"/>"#, r.x, r.y, r.w, r.h);
-        // The map shows code only: matching from the bottom, then non-matching on top.
+        // The map shows code only: matching from the bottom, then partially matching on top.
         let (m, n) = (a.code.matching_pct() / 100.0, a.code.non_matching_pct() / 100.0);
         let mh = r.h * m;
         let nh = r.h * n;

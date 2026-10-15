@@ -200,7 +200,7 @@ fn report_format(base_url: &str) -> Markup {
             tbody {
                 tr { td { code { "code.total" } } td { "Total amount of code." } }
                 tr { td { code { "code.matching" } } td { "Code decompiled and matching the original binary." } }
-                tr { td { code { "code.non_matching" } } td { "Code decompiled to equivalent but non-matching source." } }
+                tr { td { code { "code.non_matching" } } td { "Code decompiled to equivalent but only partially matching source." } }
                 tr { td { code { "data.total" } ", " code { "data.done" } } td { "Data (tables, assets, strings…) total and decompiled. Optional." } }
                 tr { td { code { "functions.total" } ", " code { "functions.matching" } } td { "Function counts, shown on the project page and the functions badge. Optional." } }
                 tr { td { code { "unit" } } td { "Label for the numbers, e.g. " code { "bytes" } " or " code { "functions" } " (default " code { "bytes" } ")." } }
@@ -263,7 +263,7 @@ fn objdiff(base_url: &str, app_slug: Option<&str>) -> Markup {
             thead { tr { th { "objdiff" } th { "decompilati.onl" } } }
             tbody {
                 tr { td { "matched code" } td { "matching code" } }
-                tr { td { "fuzzy match beyond matched code" } td { "non-matching code (an estimate: objdiff has no exact figure for it)" } }
+                tr { td { "fuzzy match beyond matched code" } td { "partially matching code (an estimate: objdiff has no exact figure for it)" } }
                 tr { td { "matched data" } td { "data" } }
                 tr { td { "matched / total functions" } td { "functions" } }
                 tr { td { code { "progress_categories" } } td { "areas, with their units inside" } }
@@ -322,7 +322,7 @@ fn decomp_dev(base_url: &str, app_slug: Option<&str>) -> Markup {
 
         h2 { "Differences from decomp.dev" }
         ul {
-            li { "objdiff has no exact \"decompiled but not matching\" figure, so non-matching code is estimated from the fuzzy match percentage." }
+            li { "objdiff has no exact \"partially matching\" figure, so partially matching code is estimated from the fuzzy match percentage." }
             li { "Categories (" code { "progress_categories" } ") become the areas of the map, with their units inside." }
             li { "Only JSON reports are supported, not binary protobuf ones." }
             li { "Badges have their own URLs (see " a href="/docs/badges" { "Badges & data" } "), but old decomp.dev badge links redirect to them." }
@@ -338,7 +338,7 @@ fn badges(base_url: &str) -> Markup {
         table {
             thead { tr { th { "URL" } th { "Shows" } } }
             tbody {
-                tr { td { code { "/badge/{slug}.svg" } } td { "Decompiled code (matching + non-matching)." } }
+                tr { td { code { "/badge/{slug}.svg" } } td { "Decompiled code (matching + partially matching)." } }
                 tr { td { code { "/badge/{slug}/matching.svg" } } td { "Matching code." } }
                 tr { td { code { "/badge/{slug}/data.svg" } } td { "Data, or \"n/a\" if the project doesn't report it." } }
                 tr { td { code { "/badge/{slug}/functions.svg" } } td { "Matched / total functions, or \"n/a\"." } }
@@ -351,7 +351,8 @@ fn badges(base_url: &str) -> Markup {
 
         h2 { "Feeds" }
         ul {
-            li { code { "GET /feed.xml" } " — RSS feed of the latest progress updates." }
+            li { code { "GET /feed.xml" } " — RSS feed of every project's progress updates." }
+            li { code { "GET /projects/{slug}/feed.xml" } " — RSS feed of one project's updates, every version." }
             li { code { "GET /sitemap.xml" } " — every public page, for search engines." }
         }
     }

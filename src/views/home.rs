@@ -5,7 +5,7 @@ use maud::{html, Markup};
 use crate::{
     db::Project,
     platforms::{self, PLATFORMS},
-    views::components::{ai_badge, card_grid, cover, last_change, legend, platform_chip, progress, vote},
+    views::components::{ai_badge, card_grid, cover, icon_rss, last_change, legend, platform_chip, progress, vote},
 };
 
 pub fn home(projects: &[&Project], total: usize) -> Markup {
@@ -18,6 +18,7 @@ pub fn home(projects: &[&Project], total: usize) -> Markup {
             div.home-tools {
                 (search_box())
                 a.btn.btn-ghost href="/highlights" { "★ Highlights" }
+                a.btn.btn-rss href="/feed.xml" title="Follow every project's progress in a feed reader" { (icon_rss()) span { "RSS" } }
             }
         }
 
@@ -28,7 +29,7 @@ pub fn home(projects: &[&Project], total: usize) -> Markup {
                 div {
                     h2 { "What's a decomp?" }
                     p { "A decompilation project rewrites a game's compiled machine code back into human-readable source code, usually C or C++, one function at a time. "
-                        "Code is " strong { "matching" } " when it compiles to exactly the same bytes as the original game, and " strong { "non-matching" } " when it behaves the same but doesn't compile to identical bytes yet. "
+                        "Code is " strong { "matching" } " when it compiles to exactly the same bytes as the original game, and " strong { "partially matching" } " when it behaves the same but doesn't compile to identical bytes yet. "
                         "The result is real source code that people can study, port, fix and mod." }
                 }
                 div {
@@ -48,10 +49,6 @@ pub fn home(projects: &[&Project], total: usize) -> Markup {
         }
 
         section {
-            div.section-head {
-                h2.section-title { "All projects " span.muted { "· most recently updated first" } }
-                a href="/platforms" { "By platform →" }
-            }
             (card_grid(projects))
         }
 

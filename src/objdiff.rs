@@ -2,7 +2,7 @@
 //! decomp.dev consumed. It's converted into our own report format:
 //!
 //! - matched code -> matching
-//! - fuzzy match minus matched code -> non-matching (objdiff has no exact "decompiled but
+//! - fuzzy match minus matched code -> partially matching (objdiff has no exact "decompiled but
 //!   not matching" figure; the fuzzy percentage is the closest it reports)
 //! - matched data -> data done
 //! - categories (`progress_categories`) -> areas, with their units nested inside

@@ -951,3 +951,73 @@ pub const AI_CONTRIBUTIONS: &[(&str, &str)] = &[
     ("disclosed", "Accepted if disclosed"),
     ("forbidden", "Not accepted"),
 ];
+
+// ---------------------------------------------------------------- feeds
+
+/// A progress report for RSS feeds, with the previous report of the same version (if any).
+#[derive(Debug, Clone)]
+pub struct FeedItem {
+    pub report_id: i64,
+    pub created_at: i64,
+    pub version: String,
+    pub code: CodeStats,
+    pub data: DataStats,
+    pub commit: Option<String>,
+    pub message: Option<String>,
+    pub slug: String,
+    pub name: String,
+    pub repo: String,
+    pub prev_code: Option<CodeStats>,
+}
+
+const FEED_SQL: &str = "SELECT r.id, r.created_at, r.version, r.code_total, r.code_matching, r.code_nonmatching,
+        r.data_total, r.data_done, r.commit_hash, r.message, p.slug, p.name, p.repo,
+        prev.code_total, prev.code_matching, prev.code_nonmatching
+    FROM reports r
+    JOIN projects p ON p.id = r.project_id
+    JOIN users u ON u.id = p.owner_id
+    LEFT JOIN LATERAL (
+        SELECT q.code_total, q.code_matching, q.code_nonmatching FROM reports q
+        WHERE q.project_id = r.project_id AND q.version = r.version AND q.created_at < r.created_at
+        ORDER BY q.created_at DESC LIMIT 1
+    ) prev ON TRUE";
+
+fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
+    let prev_total: Option<i64> = r.try_get(13)?;
+    Ok(FeedItem {
+        report_id: r.try_get(0)?,
+        created_at: r.try_get(1)?,
+        version: r.try_get(2)?,
+        code: CodeStats { total: unsigned(r, 3)?, matching: unsigned(r, 4)?, non_matching: unsigned(r, 5)? },
+        data: DataStats { total: unsigned(r, 6)?, done: unsigned(r, 7)? },
+        commit: r.try_get(8)?,
+        message: r.try_get(9)?,
+        slug: r.try_get(10)?,
+        name: r.try_get(11)?,
+        repo: r.try_get(12)?,
+        prev_code: match prev_total {
+            Some(total) => Some(CodeStats {
+                total: total.max(0) as u64,
+                matching: unsigned(r, 14)?,
+                non_matching: unsigned(r, 15)?,
+            }),
+            None => None,
+        },
+    })
+}
+
+/// Latest reports of every listed project (same rules as the public listings).
+pub fn recent_feed_items(c: &mut Conn, hide_threshold: i64, limit: usize) -> anyhow::Result<Vec<FeedItem>> {
+    let sql = format!(
+        "{FEED_SQL}
+         WHERE NOT p.hidden AND NOT u.is_banned AND p.image IS NOT NULL AND p.upvotes - p.downvotes > $1
+         ORDER BY r.created_at DESC, r.id DESC LIMIT $2"
+    );
+    Ok(c.query(&sql, &[&hide_threshold, &(limit as i64)])?.iter().map(feed_item_from_row).collect::<Result<_, _>>()?)
+}
+
+/// Latest reports of one project, every version.
+pub fn project_feed_items(c: &mut Conn, project_id: i64, limit: usize) -> anyhow::Result<Vec<FeedItem>> {
+    let sql = format!("{FEED_SQL} WHERE r.project_id = $1 ORDER BY r.created_at DESC, r.id DESC LIMIT $2");
+    Ok(c.query(&sql, &[&project_id, &(limit as i64)])?.iter().map(feed_item_from_row).collect::<Result<_, _>>()?)
+}

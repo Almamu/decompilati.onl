@@ -8,7 +8,7 @@ use crate::{
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{code_bar, cover, data_bar, icon_discord, icon_github, last_change, legend_code, platform_chip, vote},
+        components::{code_bar, cover, data_bar, icon_discord, icon_github, icon_rss, last_change, legend_code, platform_chip, vote},
         layout::time_ago,
         svg,
     },
@@ -40,6 +40,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     @if let Some(invite) = &p.discord {
                         a.btn.btn-discord href=(invite) rel="noopener nofollow" { (icon_discord()) span { "Discord" } }
                     }
+                    a.btn.btn-rss href={ "/projects/" (p.slug) "/feed.xml" } title="Follow this project's progress in a feed reader" { (icon_rss()) span { "RSS" } }
                 }
                 @if let Some((value, label)) = crate::db::AI_CONTRIBUTIONS.iter().find(|(v, _)| !v.is_empty() && *v == p.ai_contributions) {
                     p.ai-policy { span class={ "policy policy-" (value) } title="Whether the project accepts contributions made with AI tools" { "AI contributions: " strong { (label) } } }
@@ -73,7 +74,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     (code_bar(&p.code))
                     ul.stat-parts {
                         li { span.sw.matching {} b { (fmt_pct(p.code.matching_pct())) } " matching" }
-                        li { span.sw.nonmatching {} b { (fmt_pct(p.code.non_matching_pct())) } " non-matching" }
+                        li { span.sw.nonmatching {} b { (fmt_pct(p.code.non_matching_pct())) } " partially matching" }
                         li { span.sw.none {} b { (fmt_pct(100.0 - p.code.decompiled_pct())) } " to do" }
                     }
                 }
@@ -121,7 +122,7 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                 details.area-table {
                     summary { "All areas as a table" }
                     table {
-                        thead { tr { th { "Area" } th { "Matching" } th { "Non-matching" } th { "Data" } @if with_functions { th.num { "Functions" } } th.num { "Size (" (p.unit) ")" } } }
+                        thead { tr { th { "Area" } th { "Matching" } th { "Partially matching" } th { "Data" } @if with_functions { th.num { "Functions" } } th.num { "Size (" (p.unit) ")" } } }
                         tbody { @for (i, a) in areas.iter().enumerate() { (area_rows(a, &format!("a{i}"), None, 0, with_functions)) } }
                     }
                 }

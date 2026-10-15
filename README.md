@@ -2,7 +2,7 @@
 
 A progress tracker for video game decompilation projects. Developers log in with GitHub, register their
 project, and report progress from CI through a webhook. The site shows code progress (matching /
-non-matching / not decompiled) and data progress, a map of the project's areas, a history graph,
+partially matching / not decompiled) and data progress, a map of the project's areas, a history graph,
 community votes, a highlights page, project search, and an AI badge for projects that say they're
 mainly AI-generated.
 
@@ -74,7 +74,7 @@ then dropped.
 The webhook also accepts an [objdiff](https://github.com/encounter/objdiff) `report.json`, the format
 decomp.dev used. Send it as it is, optionally gzip-compressed with `Content-Encoding: gzip`, and pass
 `?commit=<sha>`. Matched code counts as matching. Fuzzy-matched code beyond that counts as
-non-matching (objdiff has no exact figure for it). Categories become areas. After each stored
+partially matching (objdiff has no exact figure for it). Categories become areas. After each stored
 report, the server fetches the commits since the previous report from GitHub (set
 `GITHUB_API_TOKEN` to avoid the anonymous rate limit), and the project page lists them.
 

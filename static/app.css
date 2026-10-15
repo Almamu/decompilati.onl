@@ -319,3 +319,5 @@ section > .search { margin: 0 0 12px; }
 .btn-github { background: #24292f; color: #fff; }
 .btn-discord { background: #5865f2; color: #fff; }
 @media (prefers-color-scheme: dark) { .btn-github { background: #f0f3f6; color: #1f2328; } }
+.btn-rss { display: inline-flex; align-items: center; gap: 8px; background: #ee802f; color: #fff; }
+.home-tools .btn-rss { padding: 10px 14px; }

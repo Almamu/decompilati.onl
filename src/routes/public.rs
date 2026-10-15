@@ -57,7 +57,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
         let html = views::layout::render(Page {
             title: "",
             description: &format!(
-                "Track the progress of {} video game decompilation projects: matching and non-matching code, data, areas and recent changes, reported by each project's CI.",
+                "Track the progress of {} video game decompilation projects: matching and partially matching code, data, areas and recent changes, reported by each project's CI.",
                 visible.len()
             ),
             image: None,
@@ -71,6 +71,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> AppResul
                 "description": "Progress tracker for video game decompilation projects.",
             })),
             og_type: None,
+            feed: None,
         });
         Ok(CachedPage::new(html, HTML))
     })
@@ -192,6 +193,7 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
         body: views::project::project(&shown, &reports, &state.config.base_url, hidden, &names, &active),
         canonical: Some(path.clone()),
         og_type: Some("article"),
+        feed: Some(format!("/projects/{}/feed.xml", p.slug)),
         json_ld: Some(project_json_ld(state, &shown, &path, &desc)),
     });
     Ok(CachedPage::new(html, HTML))
@@ -319,34 +321,38 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// `GET /feed.xml`: the latest progress reports of every listed project.
 pub async fn feed(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     cached(&state, &headers, "/feed.xml".into(), || async {
-        let all = state.db.run(db::public_projects_owned).await?;
-        let mut list: Vec<&Project> = all
-            .iter()
-            .filter(|p| p.last_report_at.is_some() && is_visible(p, state.config.hide_threshold))
-            .collect();
-        list.sort_by_key(|p| -p.last_report_at.unwrap_or(0));
-        let base = &state.config.base_url;
-        let mut xml = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>decompilati.onl updates</title><link>{base}/</link><description>Recent decompilation progress</description>"#
+        let threshold = state.config.hide_threshold;
+        let items = state.db.run(move |c| db::recent_feed_items(c, threshold, 100)).await?;
+        let xml = views::feed::rss(
+            &state.config.base_url,
+            "decompilati.onl: decompilation progress",
+            "Progress updates from every decompilation project on decompilati.onl.",
+            "/",
+            "/feed.xml",
+            &items,
         );
-        for p in list.into_iter().take(50) {
-            let ts = p.last_report_at.unwrap_or(0);
-            let date = time::OffsetDateTime::from_unix_timestamp(ts)
-                .ok()
-                .and_then(|t| t.format(&time::format_description::well_known::Rfc2822).ok())
-                .unwrap_or_default();
-            let title = format!("{}: {} code decompiled", p.name, crate::util::fmt_pct(p.code.decompiled_pct()));
-            xml.push_str(&format!(
-                "<item><title>{}</title><link>{base}/projects/{}</link><guid isPermaLink=\"false\">{}-{ts}</guid><pubDate>{date}</pubDate><description>{}</description></item>",
-                xml_escape(&title),
-                p.slug,
-                p.slug,
-                xml_escape(p.last_message.as_deref().unwrap_or(""))
-            ));
-        }
-        xml.push_str("</channel></rss>");
+        Ok(CachedPage::new(xml, "application/rss+xml; charset=utf-8"))
+    })
+    .await
+}
+
+/// `GET /projects/{slug}/feed.xml`: one project's progress reports, every version.
+pub async fn project_feed(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
+    cached(&state, &headers, format!("/projects/{slug}/feed.xml"), || async {
+        let p = load_public_project(&state, slug).await?;
+        let pid = p.id;
+        let items = state.db.run(move |c| db::project_feed_items(c, pid, 100)).await?;
+        let xml = views::feed::rss(
+            &state.config.base_url,
+            &format!("{}: decompilation progress", p.name),
+            &format!("Progress updates from the {} decompilation.", p.name),
+            &format!("/projects/{}", p.slug),
+            &format!("/projects/{}/feed.xml", p.slug),
+            &items,
+        );
         Ok(CachedPage::new(xml, "application/rss+xml; charset=utf-8"))
     })
     .await

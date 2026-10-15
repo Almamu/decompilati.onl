@@ -26,7 +26,7 @@ impl CodeStats {
     pub fn non_matching_pct(&self) -> f64 {
         pct(self.non_matching, self.total)
     }
-    /// Matching + non-matching (i.e. everything that's been decompiled in some form).
+    /// Matching + partially matching (i.e. everything that's been decompiled in some form).
     pub fn decompiled_pct(&self) -> f64 {
         pct(self.matching + self.non_matching, self.total)
     }
