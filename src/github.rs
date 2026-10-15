@@ -134,3 +134,67 @@ pub fn spawn_commit_fetch(state: AppState, project: db::Project, version: String
         }
     });
 }
+
+#[derive(Deserialize)]
+struct RepoIdentity {
+    id: i64,
+    full_name: String,
+}
+
+/// Starts the task that keeps repository names current: right away (which also fills in
+/// missing repository ids) and then once a day. GitHub redirects renamed and transferred
+/// repositories, so looking them up by id, or by their old name, gives the current name.
+pub fn spawn_repo_refresh(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = refresh_repo_names(&state).await {
+                tracing::warn!(error = %e, "couldn't refresh repository names");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+        }
+    });
+}
+
+async fn refresh_repo_names(state: &AppState) -> anyhow::Result<()> {
+    let projects = state.db.run(db::repo_identities).await?;
+    let mut renamed = 0;
+    for p in projects {
+        let url = match p.repo_id {
+            Some(id) => format!("https://api.github.com/repositories/{id}"),
+            None => format!("https://api.github.com/repos/{}", p.repo),
+        };
+        // A deleted or private repository (404) or a rate limit just keeps the stored name.
+        let Ok(current) = get::<RepoIdentity>(state, &url).await else { continue };
+        if p.repo_id == Some(current.id) && p.repo == current.full_name {
+            continue;
+        }
+        let (pid, name, id) = (p.project_id, current.full_name.clone(), current.id);
+        state.db.run(move |c| db::set_repo_identity(c, pid, &name, id)).await?;
+        if p.repo != current.full_name {
+            renamed += 1;
+            tracing::info!(project = %p.slug, from = %p.repo, to = %current.full_name, "repository renamed");
+            state.cache.invalidate(crate::cache::project_paths(&p.slug, &p.platform));
+        }
+        // Stay well within the API rate limit.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    if renamed > 0 {
+        tracing::info!(renamed, "refreshed repository names");
+    }
+    Ok(())
+}
+
+/// Called with what GitHub says a repository is currently called (e.g. from a webhook):
+/// updates projects registered under its old name.
+pub async fn note_repo_name(state: &AppState, repo_id: i64, full_name: &str) {
+    let name = full_name.to_string();
+    match state.db.run(move |c| db::rename_repo(c, repo_id, &name)).await {
+        Ok(changed) => {
+            for (slug, platform) in changed {
+                tracing::info!(project = %slug, to = %full_name, "repository renamed");
+                state.cache.invalidate(crate::cache::project_paths(&slug, &platform));
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "couldn't record a repository rename"),
+    }
+}

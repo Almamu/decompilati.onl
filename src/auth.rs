@@ -307,6 +307,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppRes
 
 #[derive(Deserialize)]
 struct RepoInfo {
+    id: i64,
     full_name: String,
     private: bool,
     #[serde(default)]
@@ -331,7 +332,14 @@ pub enum RepoListError {
 
 /// Public repositories the user can push to (`owner/name`), sorted by most recently pushed.
 /// Cached per user for a few minutes so form re-renders don't hit GitHub every time.
-pub async fn pushable_repos(state: &AppState, user: &SessionUser) -> Result<Vec<String>, RepoListError> {
+/// A repository the user can push to: its current `owner/name` and GitHub's stable id.
+#[derive(Clone, Debug)]
+pub struct RepoRef {
+    pub full_name: String,
+    pub id: i64,
+}
+
+pub async fn pushable_repos(state: &AppState, user: &SessionUser) -> Result<Vec<RepoRef>, RepoListError> {
     const TTL: i64 = 300;
     let now = crate::util::now();
     if let Some((at, repos)) = state.repo_cache.lock().get(&user.user.id) {
@@ -364,7 +372,7 @@ pub async fn pushable_repos(state: &AppState, user: &SessionUser) -> Result<Vec<
             batch
                 .into_iter()
                 .filter(|r| !r.private && r.permissions.as_ref().is_some_and(|p| p.admin || p.maintain || p.push))
-                .map(|r| r.full_name),
+                .map(|r| RepoRef { full_name: r.full_name, id: r.id }),
         );
         if done {
             break;

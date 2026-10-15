@@ -58,7 +58,9 @@ struct HeadCommit {
 
 #[derive(Deserialize)]
 struct Repository {
+    id: i64,
     full_name: String,
+    #[serde(default)]
     default_branch: String,
 }
 
@@ -99,6 +101,20 @@ pub async fn webhook(State(state): State<AppState>, headers: HeaderMap, body: By
         return (StatusCode::UNAUTHORIZED, "bad signature").into_response();
     }
     let event = headers.get("x-github-event").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if event == "repository" {
+        // Renamed or transferred: keep the stored name current (matched by the stable id).
+        #[derive(Deserialize)]
+        struct RepositoryEvent {
+            action: String,
+            repository: Repository,
+        }
+        if let Ok(ev) = serde_json::from_slice::<RepositoryEvent>(&body) {
+            if ev.action == "renamed" || ev.action == "transferred" {
+                crate::github::note_repo_name(&state, ev.repository.id, &ev.repository.full_name).await;
+            }
+        }
+        return (StatusCode::OK, "ok").into_response();
+    }
     if event != "workflow_run" {
         // `ping`, `installation` and friends need no action.
         return (StatusCode::OK, "ignored").into_response();
@@ -120,7 +136,7 @@ pub async fn webhook(State(state): State<AppState>, headers: HeaderMap, body: By
         return (StatusCode::OK, "ignored: no installation").into_response();
     };
     // GitHub expects a quick answer; the download and import happen in the background.
-    tokio::spawn(import_run(state, app, installation.id, ev.repository.full_name, ev.workflow_run));
+    tokio::spawn(import_run(state, app, installation.id, ev.repository.id, ev.repository.full_name, ev.workflow_run));
     (StatusCode::ACCEPTED, "queued").into_response()
 }
 
@@ -175,15 +191,38 @@ fn read_report(zip_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(out)
 }
 
-async fn import_run(state: AppState, app: GithubAppConfig, installation: u64, repo: String, run: WorkflowRun) {
-    if let Err(e) = try_import_run(&state, &app, installation, &repo, run).await {
+async fn import_run(state: AppState, app: GithubAppConfig, installation: u64, repo_id: i64, repo: String, run: WorkflowRun) {
+    if let Err(e) = try_import_run(&state, &app, installation, repo_id, &repo, run).await {
         tracing::warn!(%repo, error = %e, "github app import failed");
     }
 }
 
-async fn try_import_run(state: &AppState, app: &GithubAppConfig, installation: u64, repo: &str, run: WorkflowRun) -> anyhow::Result<()> {
+async fn try_import_run(
+    state: &AppState,
+    app: &GithubAppConfig,
+    installation: u64,
+    repo_id: i64,
+    repo: &str,
+    run: WorkflowRun,
+) -> anyhow::Result<()> {
+    // The payload has the repository's current name: refresh projects stored under an old one,
+    // and give projects matched by name their id.
+    crate::github::note_repo_name(state, repo_id, repo).await;
     let r = repo.to_string();
-    let projects = state.db.run(move |c| db::projects_by_repo(c, &r)).await?;
+    let projects = state
+        .db
+        .run(move |c| {
+            let by_id = db::projects_by_repo_id(c, repo_id)?;
+            let by_name: Vec<db::Project> = db::projects_by_repo(c, &r)?
+                .into_iter()
+                .filter(|p| p.github_repo_id.is_none())
+                .collect();
+            for p in &by_name {
+                db::set_repo_identity(c, p.id, &r, repo_id)?;
+            }
+            Ok(by_id.into_iter().chain(by_name).collect::<Vec<_>>())
+        })
+        .await?;
     if projects.is_empty() {
         return Ok(());
     }

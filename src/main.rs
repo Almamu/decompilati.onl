@@ -144,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
     let bind = config.bind;
     let state = AppState::new(config, db)?;
 
+    github::spawn_repo_refresh(state.clone());
     if let Err(e) = imports::resume(&state).await {
         tracing::error!(error = %e, "couldn't resume history imports");
     }

@@ -32,7 +32,7 @@ fn page(title: &str, body: Markup) -> Response {
 
 async fn repo_options(state: &AppState, u: &SessionUser, next: &str) -> RepoOptions {
     match pushable_repos(state, u).await {
-        Ok(list) => RepoOptions::List(list),
+        Ok(list) => RepoOptions::List(list.into_iter().map(|r| r.full_name).collect()),
         Err(RepoListError::Expired) => RepoOptions::Expired { next: next.to_string() },
         Err(RepoListError::Failed) => RepoOptions::Failed,
     }
@@ -92,8 +92,9 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         return Err("Pick a platform.".into());
     }
     let selected = f.repo.trim();
-    let repo = match existing {
-        Some(p) if selected.is_empty() || p.repo.eq_ignore_ascii_case(selected) => p.repo.clone(),
+    // The repository id is only known (and only changes) when one is picked from the list.
+    let (repo, github_repo_id) = match existing {
+        Some(p) if selected.is_empty() || p.repo.eq_ignore_ascii_case(selected) => (p.repo.clone(), None),
         _ => {
             if selected.is_empty() {
                 return Err("Pick a repository.".into());
@@ -105,7 +106,8 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
             };
             repos
                 .into_iter()
-                .find(|r| r.eq_ignore_ascii_case(selected))
+                .find(|r| r.full_name.eq_ignore_ascii_case(selected))
+                .map(|r| (r.full_name, Some(r.id)))
                 .ok_or("Pick one of your public repositories from the list.")?
         }
     };
@@ -136,6 +138,7 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         name,
         platform: f.platform.clone(),
         repo,
+        github_repo_id,
         ai_contributions,
         discord,
         description,

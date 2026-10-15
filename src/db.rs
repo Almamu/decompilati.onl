@@ -171,6 +171,9 @@ CREATE INDEX import_jobs_project ON import_jobs(project_id, id);
 CREATE INDEX import_jobs_status ON import_jobs(status, id);
 "#, r#"
 ALTER TABLE projects ADD COLUMN discord TEXT;
+"#, r#"
+ALTER TABLE projects ADD COLUMN github_repo_id BIGINT;
+CREATE INDEX projects_github_repo_id ON projects(github_repo_id);
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -232,6 +235,8 @@ pub struct Project {
     pub default_version: String,
     /// Discord invite (`https://discord.gg/...`), if the project has a server.
     pub discord: Option<String>,
+    /// GitHub's numeric id of the repository: stable across renames and transfers.
+    pub github_repo_id: Option<i64>,
 }
 
 impl Project {
@@ -259,6 +264,8 @@ pub struct ProjectMeta {
     pub name: String,
     pub platform: String,
     pub repo: String,
+    /// GitHub's id of `repo`, when known.
+    pub github_repo_id: Option<i64>,
     pub ai_contributions: String,
     pub discord: Option<String>,
     pub description: String,
@@ -270,7 +277,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.code_total, p.code_matching, p.code_nonmatching, p.data_total, p.data_done,
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
-    p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord";
+    p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord, p.github_repo_id";
 
 fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
     Ok(Project {
@@ -306,6 +313,7 @@ fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
         default_version: r.try_get(35)?,
         functions: FunctionStats { total: unsigned(r, 36)?, matching: unsigned(r, 37)? },
         discord: r.try_get(38)?,
+        github_repo_id: r.try_get(39)?,
     })
 }
 
@@ -487,10 +495,10 @@ pub fn image_in_use(c: &mut Conn, image: &str) -> anyhow::Result<bool> {
 pub fn insert_project(c: &mut Conn, owner_id: i64, m: &ProjectMeta, image: &str, key_hash: &str, key_prefix: &str) -> anyhow::Result<i64> {
     let t = now();
     let row = c.query_one(
-        "INSERT INTO projects (slug, owner_id, name, platform, repo, ai_contributions, discord, description, ai_generated, image,
+        "INSERT INTO projects (slug, owner_id, name, platform, repo, github_repo_id, ai_contributions, discord, description, ai_generated, image,
                                api_key_hash, api_key_prefix, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $13, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
-        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord],
+         VALUES ($1, $2, $3, $4, $5, $14, $6, $13, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
+        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord, &m.github_repo_id],
     )?;
     Ok(row.try_get(0)?)
 }
@@ -498,8 +506,9 @@ pub fn insert_project(c: &mut Conn, owner_id: i64, m: &ProjectMeta, image: &str,
 pub fn update_project_meta(c: &mut Conn, id: i64, m: &ProjectMeta) -> anyhow::Result<()> {
     c.execute(
         "UPDATE projects SET slug = $2, name = $3, platform = $4, repo = $5, ai_contributions = $6, description = $7, discord = $10,
+                             github_repo_id = COALESCE($11, github_repo_id),
                              ai_generated = $8, updated_at = $9 WHERE id = $1",
-        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord],
+        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord, &m.github_repo_id],
     )?;
     Ok(())
 }
@@ -1026,4 +1035,56 @@ pub fn project_feed_items(c: &mut Conn, project_id: i64, limit: usize) -> anyhow
 pub fn requeue_import_job(c: &mut Conn, id: i64, message: &str) -> anyhow::Result<()> {
     c.execute("UPDATE import_jobs SET status = 'queued', error = $2 WHERE id = $1", &[&id, &message])?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- repository identity
+
+/// Projects registered for a GitHub repository id (renames don't change it).
+pub fn projects_by_repo_id(c: &mut Conn, repo_id: i64) -> anyhow::Result<Vec<Project>> {
+    query_projects(c, "WHERE p.github_repo_id = $1 AND NOT u.is_banned", &[&repo_id])
+}
+
+/// A project's repository as stored, for refreshing names.
+pub struct RepoIdentity {
+    pub project_id: i64,
+    pub repo: String,
+    pub repo_id: Option<i64>,
+    pub slug: String,
+    pub platform: String,
+}
+
+/// Every project's repository name and id, for refreshing names.
+pub fn repo_identities(c: &mut Conn) -> anyhow::Result<Vec<RepoIdentity>> {
+    Ok(c
+        .query("SELECT id, repo, github_repo_id, slug, platform FROM projects ORDER BY id", &[])?
+        .iter()
+        .map(|r| {
+            Ok(RepoIdentity {
+                project_id: r.try_get(0)?,
+                repo: r.try_get(1)?,
+                repo_id: r.try_get(2)?,
+                slug: r.try_get(3)?,
+                platform: r.try_get(4)?,
+            })
+        })
+        .collect::<Result<_, postgres::Error>>()?)
+}
+
+/// Records a project's repository id and current name.
+pub fn set_repo_identity(c: &mut Conn, project_id: i64, repo: &str, repo_id: i64) -> anyhow::Result<()> {
+    c.execute("UPDATE projects SET repo = $2, github_repo_id = $3 WHERE id = $1", &[&project_id, &repo, &repo_id])?;
+    Ok(())
+}
+
+/// Updates the name of every project registered for a repository id after a rename or
+/// transfer. Returns the `(slug, platform)` of the projects that changed.
+pub fn rename_repo(c: &mut Conn, repo_id: i64, full_name: &str) -> anyhow::Result<Vec<(String, String)>> {
+    Ok(c
+        .query(
+            "UPDATE projects SET repo = $2 WHERE github_repo_id = $1 AND repo <> $2 RETURNING slug, platform",
+            &[&repo_id, &full_name],
+        )?
+        .iter()
+        .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+        .collect::<Result<_, postgres::Error>>()?)
 }

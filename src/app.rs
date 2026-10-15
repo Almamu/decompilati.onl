@@ -17,7 +17,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub limiter: Arc<RateLimiter>,
     /// Per-user cache of pushable GitHub repos: user id -> (fetched at, repos).
-    pub repo_cache: Arc<Mutex<HashMap<i64, (i64, Vec<String>)>>>,
+    pub repo_cache: Arc<Mutex<HashMap<i64, (i64, Vec<crate::auth::RepoRef>)>>>,
     /// Slots for history imports running at the same time (see `github_app`).
     pub import_slots: Arc<tokio::sync::Semaphore>,
 }
