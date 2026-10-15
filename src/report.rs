@@ -14,7 +14,7 @@ pub struct CodeStats {
     pub non_matching: u64,
     /// Code in units that are fully linked (built entirely from decompiled source); objdiff's
     /// `complete_code`. Independent of the two above.
-    #[serde(default, alias = "complete", alias = "fully_linked")]
+    #[serde(default, alias = "complete", alias = "fully_linked", skip_serializing_if = "is_zero")]
     pub linked: u64,
 }
 
@@ -72,6 +72,11 @@ impl FunctionStats {
     pub fn pct(&self) -> f64 {
         pct(self.matching, self.total)
     }
+}
+
+/// Left out of stored JSON when zero, so reports without it serialise as they always did.
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 pub fn pct(part: u64, total: u64) -> f64 {

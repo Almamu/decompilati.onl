@@ -731,6 +731,40 @@ pub fn merge_versions(c: &mut Conn, project_id: i64, from: &str, into: &str) -> 
     Ok(())
 }
 
+/// Fills in fully linked code for a report already in the history (matched by commit, or by
+/// time when there's no commit) that was stored without it, and for the version's current
+/// state if that's the same report. Returns whether anything changed.
+pub fn backfill_linked(c: &mut Conn, project_id: i64, version: &str, commit: Option<&str>, at: i64, code: &CodeStats) -> anyhow::Result<bool> {
+    if code.linked == 0 {
+        return Ok(false);
+    }
+    let mut tx = c.transaction()?;
+    let linked = big(code.linked);
+    let total = big(code.total);
+    let reports = tx.execute(
+        "UPDATE reports SET code_linked = $5
+         WHERE project_id = $1 AND version = $2 AND code_linked = 0 AND code_total = $6
+           AND (commit_hash = $3 OR ($3::TEXT IS NULL AND created_at = $4))",
+        &[&project_id, &version, &commit, &at, &linked, &total],
+    )?;
+    let current = tx.execute(
+        "UPDATE project_versions SET code_linked = $5
+         WHERE project_id = $1 AND version = $2 AND code_linked = 0 AND code_total = $6
+           AND (last_commit = $3 OR ($3::TEXT IS NULL AND last_report_at = $4))",
+        &[&project_id, &version, &commit, &at, &linked, &total],
+    )?;
+    if current > 0 {
+        let is_default: bool = tx
+            .query_one("SELECT default_version = $2 FROM projects WHERE id = $1", &[&project_id, &version])?
+            .try_get(0)?;
+        if is_default {
+            mirror_version(&mut tx, project_id, version)?;
+        }
+    }
+    tx.commit()?;
+    Ok(reports + current > 0)
+}
+
 /// Result of storing a report that changed something.
 pub struct Applied {
     /// The commit of the version's previous report, to list the commits in between.
@@ -771,8 +805,15 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
             return Ok(None);
         }
     }
-    let prev_commit = current.as_ref().and_then(|v| v.last_commit.clone());
-    let prev = current.map(|v| (v.code, v.data)).unwrap_or_default();
+    // The current report sent again with more detail (e.g. a re-import adding fully linked
+    // code): it replaces itself, keeping what it's compared with and its commit list.
+    let same = current.as_ref().is_some_and(|v| v.last_report_at == Some(t) && v.last_commit == r.commit);
+    let prev_commit = if same { None } else { current.as_ref().and_then(|v| v.last_commit.clone()) };
+    let prev = match &current {
+        Some(v) if same => (v.prev_code, v.prev_data),
+        Some(v) => (v.code, v.data),
+        None => Default::default(),
+    };
     tx.execute(
         "INSERT INTO project_versions (project_id, version, unit, layout, code_total, code_matching, code_nonmatching,
                 data_total, data_done, prev_code_total, prev_code_matching, prev_code_nonmatching, prev_data_total,
@@ -787,17 +828,33 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
             prev_code_nonmatching = excluded.prev_code_nonmatching, prev_data_total = excluded.prev_data_total,
             prev_data_done = excluded.prev_data_done, areas_json = excluded.areas_json,
             last_report_at = excluded.last_report_at, last_commit = excluded.last_commit,
-            last_message = excluded.last_message, commits_json = '{}',
+            last_message = excluded.last_message,
+            commits_json = CASE WHEN $23 THEN project_versions.commits_json ELSE '{}' END,
             functions_total = excluded.functions_total, functions_matched = excluded.functions_matched,
             code_linked = excluded.code_linked, prev_code_linked = excluded.prev_code_linked",
         &[
             &project.id, &version, &r.unit, &r.layout.as_str(), &big(r.code.total), &big(r.code.matching),
             &big(r.code.non_matching), &big(r.data.total), &big(r.data.done), &big(prev.0.total), &big(prev.0.matching),
             &big(prev.0.non_matching), &big(prev.1.total), &big(prev.1.done), &areas_json, &t, &r.commit, &r.message,
-            &big(r.functions.total), &big(r.functions.matching), &big(r.code.linked), &big(prev.0.linked),
+            &big(r.functions.total), &big(r.functions.matching), &big(r.code.linked), &big(prev.0.linked), &same,
         ],
     )?;
-    insert_report_row(&mut tx, project.id, r, t)?;
+    let replaced = if same {
+        tx.execute(
+            "UPDATE reports SET code_total = $4, code_matching = $5, code_nonmatching = $6, data_total = $7, data_done = $8,
+                    code_linked = $9, message = COALESCE($10, message)
+             WHERE project_id = $1 AND version = $2 AND created_at = $3 AND commit_hash IS NOT DISTINCT FROM $11",
+            &[
+                &project.id, &r.version, &t, &big(r.code.total), &big(r.code.matching), &big(r.code.non_matching),
+                &big(r.data.total), &big(r.data.done), &big(r.code.linked), &r.message, &r.commit,
+            ],
+        )?
+    } else {
+        0
+    };
+    if replaced == 0 {
+        insert_report_row(&mut tx, project.id, r, t)?;
+    }
     // Fall back to this version as the default if the current default has never reported.
     let default: String = tx.query_one("SELECT default_version FROM projects WHERE id = $1", &[&project.id])?.try_get(0)?;
     let default_exists: bool = tx

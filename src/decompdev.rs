@@ -100,7 +100,7 @@ pub async fn import(state: &AppState, project: &db::Project, url: &str, job: i64
     let total: usize = histories.iter().map(|(_, e, _)| e.len()).sum();
     imports::progress(state, job, total, 0, 0).await;
 
-    let (mut done, mut imported) = (0, 0);
+    let (mut done, mut imported, mut linked) = (0, 0, 0);
     let mut touched = BTreeSet::new();
     for (version, entries, latest) in histories {
         let mut latest = latest;
@@ -116,8 +116,21 @@ pub async fn import(state: &AppState, project: &db::Project, url: &str, job: i64
             input.layout = Some("treemap".into());
             let Ok(report) = input.normalize() else { continue };
             let p = project.clone();
-            if state.db.run(move |c| db::apply_report(c, &p, &report, Some(at))).await?.is_some() {
+            let (backfilled, applied) = state
+                .db
+                .run(move |c| {
+                    // Reports imported before fully linked code was tracked get it filled in.
+                    let backfilled = db::backfill_linked(c, p.id, &report.version, report.commit.as_deref(), at, &report.code)?;
+                    Ok((backfilled, db::apply_report(c, &p, &report, Some(at))?.is_some()))
+                })
+                .await?;
+            if applied {
                 imported += 1;
+            }
+            if backfilled {
+                linked += 1;
+            }
+            if applied || backfilled {
                 touched.insert(version.clone());
             }
             if done % 25 == 0 {
@@ -134,7 +147,7 @@ pub async fn import(state: &AppState, project: &db::Project, url: &str, job: i64
     for version in &touched {
         state.cache.invalidate(version_paths(&project.slug, &project.platform, version));
     }
-    tracing::info!(repo = %project.repo, imported, "decomp.dev import finished");
+    tracing::info!(repo = %project.repo, imported, linked, "decomp.dev import finished");
     Ok(())
 }
 
