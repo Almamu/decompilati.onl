@@ -111,7 +111,7 @@ fn router(state: AppState) -> Router {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into()))
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn,postgres=warn,tokio_postgres=warn".into()))
         .init();
 
     let config = config::Config::from_env()?;
