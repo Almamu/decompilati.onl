@@ -1319,6 +1319,20 @@ pub struct PortInput {
     pub description: String,
 }
 
+/// Every port, with its project's id, in each project's order.
+pub fn all_ports(c: &mut Conn) -> anyhow::Result<Vec<(i64, Port)>> {
+    Ok(c
+        .query("SELECT project_id, id, name, url, platforms, description FROM project_ports ORDER BY project_id, position, id", &[])?
+        .iter()
+        .map(|r| {
+            Ok((
+                r.try_get(0)?,
+                Port { id: r.try_get(1)?, name: r.try_get(2)?, url: r.try_get(3)?, platforms: r.try_get(4)?, description: r.try_get(5)? },
+            ))
+        })
+        .collect::<Result<_, postgres::Error>>()?)
+}
+
 pub fn ports_for_project(c: &mut Conn, project_id: i64) -> anyhow::Result<Vec<Port>> {
     Ok(c
         .query(

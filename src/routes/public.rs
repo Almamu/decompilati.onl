@@ -134,6 +134,31 @@ pub async fn platforms_index(State(state): State<AppState>, headers: HeaderMap) 
     .await
 }
 
+/// `GET /ports`: every listed project's ports, grouped by project.
+pub async fn ports(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    cached(&state, &headers, "/ports".into(), || async {
+        let (projects, ports) = state.db.run(|c| Ok((db::public_projects_owned(c)?, db::all_ports(c)?))).await?;
+        let threshold = state.config.hide_threshold;
+        let mut groups: Vec<(&Project, Vec<db::Port>)> = projects
+            .iter()
+            .filter(|p| is_visible(p, threshold))
+            .map(|p| (p, ports.iter().filter(|(pid, _)| *pid == p.id).map(|(_, port)| port.clone()).collect::<Vec<_>>()))
+            .filter(|(_, ports)| !ports.is_empty())
+            .collect();
+        groups.sort_by_key(|(p, _)| p.name.to_lowercase());
+        let html = views::layout::render(Page {
+            title: "Ports",
+            description: "Native versions and other ports built from video game decompilation projects.",
+            image: None,
+            body: views::home::ports_page(&groups),
+            canonical: Some("/ports".into()),
+            ..Default::default()
+        });
+        Ok(CachedPage::new(html, HTML))
+    })
+    .await
+}
+
 async fn load_public_project(state: &AppState, slug: String) -> AppResult<Project> {
     state.db.run(move |c| db::project_by_slug(c, &slug)).await?.ok_or(AppError::NotFound)
 }
@@ -466,6 +491,7 @@ pub async fn sitemap(State(state): State<AppState>, headers: HeaderMap) -> AppRe
         url("/projects", latest);
         url("/highlights", latest);
         url("/platforms", latest);
+        url("/ports", None);
         for page in views::docs::PAGES {
             url(&views::docs::path(page), None);
         }

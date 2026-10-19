@@ -146,6 +146,7 @@ pub fn project_paths(slug: &str, platform: &str) -> Vec<String> {
         "/highlights".into(),
         "/platforms".into(),
         format!("/platform/{platform}"),
+        "/ports".into(),
         format!("/projects/{slug}"),
         format!("/projects/{slug}/progress.json"),
         format!("/projects/{slug}/feed.xml"),

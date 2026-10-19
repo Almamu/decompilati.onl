@@ -335,16 +335,23 @@ fn ports_section(ports: &[Port]) -> Markup {
         section.panel #ports {
             h2 { "Ports" }
             p.muted { "Versions of the game built from this decompilation, listed by the project. Downloads may need your own copy of the game." }
-            ul.ports {
-                @for port in ports {
-                    li.port {
-                        div.port-head {
-                            a.port-name href=(port.url) rel="noopener nofollow ugc" { (port.name) }
-                            @if !port.platforms.is_empty() { span.port-platforms { (port.platforms) } }
-                        }
-                        @if !port.description.is_empty() { p.port-desc.pre { (port.description) } }
-                        span.muted.small { (link_host(&port.url)) }
+            (port_list(ports))
+        }
+    }
+}
+
+/// Port cards, shared with the `/ports` page.
+pub fn port_list(ports: &[Port]) -> Markup {
+    html! {
+        ul.ports {
+            @for port in ports {
+                li.port {
+                    div.port-head {
+                        a.port-name href=(port.url) rel="noopener nofollow ugc" { (port.name) }
+                        @if !port.platforms.is_empty() { span.port-platforms { (port.platforms) } }
                     }
+                    @if !port.description.is_empty() { p.port-desc.pre { (port.description) } }
+                    span.muted.small { (link_host(&port.url)) }
                 }
             }
         }

@@ -175,3 +175,28 @@ pub fn highlights(spotlight: &[&Project]) -> Markup {
         }
     }
 }
+
+/// `/ports`: every listed project's ports, grouped by game.
+pub fn ports_page(groups: &[(&Project, Vec<crate::db::Port>)]) -> Markup {
+    let count: usize = groups.iter().map(|(_, ports)| ports.len()).sum();
+    html! {
+        section {
+            h1 { "Ports" }
+            p.lead { "Native versions and other ports built from the decompilations tracked here, as listed by each project. Most need assets from your own copy of the game." }
+            @if groups.is_empty() {
+                div.panel.empty { p.muted { "No project has listed a port yet." } }
+            } @else {
+                p.muted { (count) " port" @if count != 1 { "s" } " from " (groups.len()) " project" @if groups.len() != 1 { "s" } "." }
+                @for (p, ports) in groups {
+                    section.panel.port-group {
+                        div.port-group-head {
+                            (platform_chip(&p.platform))
+                            h2 { a href={ "/projects/" (p.slug) } { (p.name) } }
+                        }
+                        (crate::views::project::port_list(ports))
+                    }
+                }
+            }
+        }
+    }
+}

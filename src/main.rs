@@ -40,6 +40,7 @@ fn router(state: AppState) -> Router {
         .route("/projects", get(public::projects))
         .route("/highlights", get(public::highlights))
         .route("/platforms", get(public::platforms_index))
+        .route("/ports", get(public::ports))
         .route("/platform/{slug}", get(public::platform))
         .route("/projects/{slug}", get(public::project))
         .route("/projects/{slug}/progress.json", get(public::project_json))

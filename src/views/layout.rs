@@ -97,6 +97,7 @@ pub fn render(p: Page) -> String {
                         input #menu-check.menu-check type="checkbox" aria-label="Show the menu" aria-controls="site-menu";
                         nav #site-menu {
                             a href="/platforms" { "Platforms" }
+                            a href="/ports" { "Ports" }
                             a href="/docs" { "Docs" }
                             span #auth-menu {}
                         }

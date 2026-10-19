@@ -366,3 +366,5 @@ section > .search { margin: 0 0 12px; }
 .port-edit { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
 .port-edit summary { cursor: pointer; }
 .port-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.port-group-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.port-group-head h2 { margin: 0; }

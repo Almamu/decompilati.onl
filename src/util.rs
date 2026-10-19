@@ -139,7 +139,7 @@ pub fn parse_timestamp(s: &str) -> Option<i64> {
 pub const RESERVED_NAMES: &[&str] = &[
     "p", "project", "projects", "platform", "platforms", "docs", "doc", "dashboard", "admin", "auth", "api",
     "static", "uploads", "badge", "badges", "feed.xml", "robots.txt", "sitemap.xml", "favicon.ico", "login",
-    "logout", "new", "about", "help", "settings", "user", "users",
+    "logout", "new", "about", "help", "settings", "user", "users", "ports",
 ];
 
 pub fn is_reserved_name(name: &str) -> bool {
