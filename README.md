@@ -88,8 +88,12 @@ report, the server fetches the commits since the previous report from GitHub (se
   (`ADMIN_LOGINS`) pin first, then the most upvoted.
 - Admins can also hide projects and ban users from `/admin`. Banning a user signs them out and hides
   their projects.
-- To register a repository, the user must have push access to it on GitHub. Only public
-  repositories can be registered.
+- To register a repository, the user must have push access to it on GitHub. Private repositories
+  are registered through the GitHub App (it must be installed on them; it confirms push access, since
+  login only grants access to public data). Their pages don't link to the repository or its commits,
+  and commit lists aren't fetched for them.
+- Owners can list ports built on their decompilation (name, link, platforms, description); they
+  show in a "Ports" section of the project page and in `progress.json`.
 
 ## Deploying on a VPS
 

@@ -350,7 +350,19 @@ section > .search { margin: 0 0 12px; }
 }
 .repo-choice { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; }
 .repo-choice legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
-.form:has(.repo-choice input[value="github"]:checked) .repo-external { display: none; }
-.form:has(.repo-choice input[value="external"]:checked) .repo-github { display: none; }
+.form:has(.repo-choice input[value="github"]:checked) :is(.repo-external, .repo-private),
+.form:has(.repo-choice input[value="github-private"]:checked) :is(.repo-github, .repo-external),
+.form:has(.repo-choice input[value="external"]:checked) :is(.repo-github, .repo-private) { display: none; }
 .btn-repo { background: #57606a; color: #fff; }
 .browse-platforms { margin-bottom: 20px; } .browse-platforms .platforms { margin-bottom: 0; }
+.btn-private { background: var(--none); color: var(--text); cursor: default; }
+.btn-private:hover { filter: none; }
+.ports { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.port { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.port-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.port-name { font-weight: 600; }
+.port-platforms { font-size: .8rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.port-desc { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
+.port-edit { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.port-edit summary { cursor: pointer; }
+.port-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

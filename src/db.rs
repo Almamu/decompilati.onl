@@ -190,6 +190,22 @@ ALTER TABLE projects ADD COLUMN prev_code_linked BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE project_versions ADD COLUMN code_linked BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE project_versions ADD COLUMN prev_code_linked BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE reports ADD COLUMN code_linked BIGINT NOT NULL DEFAULT 0;
+"#, r#"
+-- Private GitHub repositories: registered through the GitHub App; the public pages don't
+-- link to them.
+ALTER TABLE projects ADD COLUMN repo_private BOOLEAN NOT NULL DEFAULT FALSE;
+-- Ports built on a decompilation (native PC versions and the like), listed on its page.
+CREATE TABLE project_ports (
+    id          BIGSERIAL PRIMARY KEY,
+    project_id  BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    platforms   TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    position    BIGINT NOT NULL,
+    created_at  BIGINT NOT NULL
+);
+CREATE INDEX project_ports_project ON project_ports(project_id, position);
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -259,6 +275,9 @@ pub struct Project {
     pub repo_url: Option<String>,
     /// GitHub App artifact imports: `*` (every `<version>_report`), empty (off) or a list.
     pub app_artifacts: String,
+    /// A private GitHub repository: progress comes through the GitHub App or the API, and the
+    /// public pages show neither links to it nor its commits.
+    pub repo_private: bool,
 }
 
 impl Project {
@@ -277,8 +296,15 @@ impl Project {
     pub fn repo_link(&self) -> String {
         repo_link(&self.repo_host, &self.repo, self.repo_url.as_deref())
     }
-    /// Web address of a commit, when the host's URL scheme is known.
+    /// Web address of the repository for public pages: none for private repositories.
+    pub fn public_repo_link(&self) -> Option<String> {
+        (!self.repo_private).then(|| self.repo_link())
+    }
+    /// Web address of a commit, when the host's URL scheme is known and the repository is public.
     pub fn commit_link(&self, sha: &str) -> Option<String> {
+        if self.repo_private {
+            return None;
+        }
         commit_link(&self.repo_host, &self.repo, self.repo_url.as_deref(), sha)
     }
     /// Short name of where the code lives, for the repository button.
@@ -326,6 +352,7 @@ pub struct ProjectMeta {
     pub ai_generated: bool,
     pub repo_host: String,
     pub repo_url: Option<String>,
+    pub repo_private: bool,
 }
 
 const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platform, p.repo, p.ai_contributions, p.description,
@@ -334,7 +361,7 @@ const PROJECT_COLS: &str = "p.id, p.slug, p.owner_id, u.login, p.name, p.platfor
     p.prev_code_total, p.prev_code_matching, p.prev_code_nonmatching, p.prev_data_total, p.prev_data_done,
     p.areas_json, p.last_report_at, p.last_commit, p.last_message, p.upvotes, p.downvotes, p.created_at, p.updated_at,
     p.commits_json, p.default_version, p.functions_total, p.functions_matched, p.discord, p.github_repo_id,
-    p.repo_host, p.repo_url, p.app_artifacts, p.code_linked, p.prev_code_linked";
+    p.repo_host, p.repo_url, p.app_artifacts, p.code_linked, p.prev_code_linked, p.repo_private";
 
 fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
     Ok(Project {
@@ -374,6 +401,7 @@ fn project_from_row(r: &Row) -> Result<Project, postgres::Error> {
         repo_host: r.try_get(40)?,
         repo_url: r.try_get(41)?,
         app_artifacts: r.try_get(42)?,
+        repo_private: r.try_get(45)?,
     })
 }
 
@@ -556,9 +584,9 @@ pub fn insert_project(c: &mut Conn, owner_id: i64, m: &ProjectMeta, image: &str,
     let t = now();
     let row = c.query_one(
         "INSERT INTO projects (slug, owner_id, name, platform, repo, github_repo_id, repo_host, repo_url, ai_contributions, discord, description, ai_generated, image,
-                               api_key_hash, api_key_prefix, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $14, $15, $16, $6, $13, $7, $8, $9, $10, $11, $12, $12) RETURNING id",
-        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord, &m.github_repo_id, &m.repo_host, &m.repo_url],
+                               api_key_hash, api_key_prefix, created_at, updated_at, repo_private)
+         VALUES ($1, $2, $3, $4, $5, $14, $15, $16, $6, $13, $7, $8, $9, $10, $11, $12, $12, $17) RETURNING id",
+        &[&m.slug, &owner_id, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &image, &key_hash, &key_prefix, &t, &m.discord, &m.github_repo_id, &m.repo_host, &m.repo_url, &m.repo_private],
     )?;
     Ok(row.try_get(0)?)
 }
@@ -567,9 +595,9 @@ pub fn update_project_meta(c: &mut Conn, id: i64, m: &ProjectMeta) -> anyhow::Re
     c.execute(
         "UPDATE projects SET slug = $2, name = $3, platform = $4, repo = $5, ai_contributions = $6, description = $7, discord = $10,
                              github_repo_id = CASE WHEN $12 = 'github' THEN COALESCE($11, github_repo_id) END,
-                             repo_host = $12, repo_url = $13,
+                             repo_host = $12, repo_url = $13, repo_private = $14,
                              ai_generated = $8, updated_at = $9 WHERE id = $1",
-        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord, &m.github_repo_id, &m.repo_host, &m.repo_url],
+        &[&id, &m.slug, &m.name, &m.platform, &m.repo, &m.ai_contributions, &m.description, &m.ai_generated, &now(), &m.discord, &m.github_repo_id, &m.repo_host, &m.repo_url, &m.repo_private],
     )?;
     Ok(())
 }
@@ -1131,11 +1159,12 @@ pub struct FeedItem {
     pub prev_code: Option<CodeStats>,
     pub repo_host: String,
     pub repo_url: Option<String>,
+    pub repo_private: bool,
 }
 
 const FEED_SQL: &str = "SELECT r.id, r.created_at, r.version, r.code_total, r.code_matching, r.code_nonmatching,
         r.data_total, r.data_done, r.commit_hash, r.message, p.slug, p.name, p.repo,
-        prev.code_total, prev.code_matching, prev.code_nonmatching, p.repo_host, p.repo_url, r.code_linked
+        prev.code_total, prev.code_matching, prev.code_nonmatching, p.repo_host, p.repo_url, r.code_linked, p.repo_private
     FROM reports r
     JOIN projects p ON p.id = r.project_id
     JOIN users u ON u.id = p.owner_id
@@ -1160,6 +1189,7 @@ fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
         repo: r.try_get(12)?,
         repo_host: r.try_get(16)?,
         repo_url: r.try_get(17)?,
+        repo_private: r.try_get(19)?,
         prev_code: match prev_total {
             Some(total) => Some(CodeStats {
                 total: total.max(0) as u64,
@@ -1208,13 +1238,14 @@ pub struct RepoIdentity {
     pub repo_id: Option<i64>,
     pub slug: String,
     pub platform: String,
+    pub private: bool,
 }
 
 /// Every project's repository name and id, for refreshing names.
 pub fn repo_identities(c: &mut Conn) -> anyhow::Result<Vec<RepoIdentity>> {
     Ok(c
         .query(
-            "SELECT id, repo, github_repo_id, slug, platform FROM projects WHERE repo_host = 'github' ORDER BY id",
+            "SELECT id, repo, github_repo_id, slug, platform, repo_private FROM projects WHERE repo_host = 'github' ORDER BY id",
             &[],
         )?
         .iter()
@@ -1225,6 +1256,7 @@ pub fn repo_identities(c: &mut Conn) -> anyhow::Result<Vec<RepoIdentity>> {
                 repo_id: r.try_get(2)?,
                 slug: r.try_get(3)?,
                 platform: r.try_get(4)?,
+                private: r.try_get(5)?,
             })
         })
         .collect::<Result<_, postgres::Error>>()?)
@@ -1247,6 +1279,112 @@ pub fn rename_repo(c: &mut Conn, repo_id: i64, full_name: &str) -> anyhow::Resul
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, postgres::Error>>()?)
+}
+
+/// Records that a repository was made private or public. Returns the `(id, slug, platform)` of
+/// the projects that changed.
+pub fn set_repo_private(c: &mut Conn, repo_id: i64, private: bool) -> anyhow::Result<Vec<(i64, String, String)>> {
+    Ok(c
+        .query(
+            "UPDATE projects SET repo_private = $2 WHERE github_repo_id = $1 AND repo_private <> $2 RETURNING id, slug, platform",
+            &[&repo_id, &private],
+        )?
+        .iter()
+        .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
+        .collect::<Result<_, postgres::Error>>()?)
+}
+
+// ---------------------------------------------------------------- ports
+
+/// Most ports a project can list.
+pub const MAX_PORTS: usize = 20;
+
+/// A port built on a project's decompilation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Port {
+    pub id: i64,
+    pub name: String,
+    pub url: String,
+    /// Where it runs, as the owner wrote it (e.g. "Windows, Linux, macOS").
+    pub platforms: String,
+    pub description: String,
+}
+
+/// A port's editable fields, already validated.
+#[derive(Debug, Clone)]
+pub struct PortInput {
+    pub name: String,
+    pub url: String,
+    pub platforms: String,
+    pub description: String,
+}
+
+pub fn ports_for_project(c: &mut Conn, project_id: i64) -> anyhow::Result<Vec<Port>> {
+    Ok(c
+        .query(
+            "SELECT id, name, url, platforms, description FROM project_ports WHERE project_id = $1 ORDER BY position, id",
+            &[&project_id],
+        )?
+        .iter()
+        .map(|r| {
+            Ok(Port {
+                id: r.try_get(0)?,
+                name: r.try_get(1)?,
+                url: r.try_get(2)?,
+                platforms: r.try_get(3)?,
+                description: r.try_get(4)?,
+            })
+        })
+        .collect::<Result<_, postgres::Error>>()?)
+}
+
+/// Adds a port at the end of the list. `false` when the project already has `MAX_PORTS`.
+pub fn add_port(c: &mut Conn, project_id: i64, p: &PortInput) -> anyhow::Result<bool> {
+    let mut tx = c.transaction()?;
+    // Serialises additions to the same project so the limit holds.
+    tx.execute("SELECT 1 FROM projects WHERE id = $1 FOR UPDATE", &[&project_id])?;
+    let row = tx.query_one("SELECT COUNT(*), COALESCE(MAX(position), 0) FROM project_ports WHERE project_id = $1", &[&project_id])?;
+    let (count, last): (i64, i64) = (row.try_get(0)?, row.try_get(1)?);
+    if count as usize >= MAX_PORTS {
+        return Ok(false);
+    }
+    tx.execute(
+        "INSERT INTO project_ports (project_id, name, url, platforms, description, position, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        &[&project_id, &p.name, &p.url, &p.platforms, &p.description, &(last + 1), &now()],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// `false` when the port doesn't belong to the project.
+pub fn update_port(c: &mut Conn, project_id: i64, port_id: i64, p: &PortInput) -> anyhow::Result<bool> {
+    Ok(c.execute(
+        "UPDATE project_ports SET name = $3, url = $4, platforms = $5, description = $6 WHERE id = $2 AND project_id = $1",
+        &[&project_id, &port_id, &p.name, &p.url, &p.platforms, &p.description],
+    )? > 0)
+}
+
+pub fn delete_port(c: &mut Conn, project_id: i64, port_id: i64) -> anyhow::Result<bool> {
+    Ok(c.execute("DELETE FROM project_ports WHERE id = $2 AND project_id = $1", &[&project_id, &port_id])? > 0)
+}
+
+/// Swaps a port with the one before it.
+pub fn move_port_up(c: &mut Conn, project_id: i64, port_id: i64) -> anyhow::Result<()> {
+    let mut tx = c.transaction()?;
+    let ids: Vec<i64> = tx
+        .query("SELECT id FROM project_ports WHERE project_id = $1 ORDER BY position, id FOR UPDATE", &[&project_id])?
+        .iter()
+        .map(|r| r.try_get(0))
+        .collect::<Result<_, _>>()?;
+    let Some(i) = ids.iter().position(|&id| id == port_id).filter(|&i| i > 0) else { return Ok(()) };
+    let mut order = ids;
+    order.swap(i - 1, i);
+    // Renumber the whole list so earlier ties can't keep the order from changing.
+    for (pos, id) in order.iter().enumerate() {
+        tx.execute("UPDATE project_ports SET position = $2 WHERE id = $1", &[id, &(pos as i64 + 1)])?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn repo_link(host: &str, repo: &str, url: Option<&str>) -> String {

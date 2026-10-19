@@ -109,8 +109,8 @@ async fn fetch(state: &AppState, repo: &str, prev: Option<&str>, head: Option<&s
 /// Background task run after a report is stored: fetch and save the commits, then refresh
 /// the cached pages.
 pub fn spawn_commit_fetch(state: AppState, project: db::Project, version: String, prev_commit: Option<String>, report_commit: Option<String>) {
-    // Commit lists come from the GitHub API.
-    if !project.is_github() {
+    // Commit lists come from the GitHub API, and private repositories' commits stay private.
+    if !project.is_github() || project.repo_private {
         return;
     }
     let prev = prev_commit.filter(|c| is_commit_hash(c));
@@ -143,6 +143,8 @@ pub fn spawn_commit_fetch(state: AppState, project: db::Project, version: String
 struct RepoIdentity {
     id: i64,
     full_name: String,
+    #[serde(default)]
+    private: bool,
 }
 
 /// Starts the task that keeps repository names current: right away (which also fills in
@@ -169,7 +171,8 @@ async fn refresh_repo_names(state: &AppState) -> anyhow::Result<()> {
         };
         // A deleted or private repository (404) or a rate limit just keeps the stored name.
         let Ok(current) = get::<RepoIdentity>(state, &url).await else { continue };
-        if p.repo_id == Some(current.id) && p.repo == current.full_name {
+        let visibility_changed = p.private != current.private;
+        if p.repo_id == Some(current.id) && p.repo == current.full_name && !visibility_changed {
             continue;
         }
         let (pid, name, id) = (p.project_id, current.full_name.clone(), current.id);
@@ -179,6 +182,9 @@ async fn refresh_repo_names(state: &AppState) -> anyhow::Result<()> {
             tracing::info!(project = %p.slug, from = %p.repo, to = %current.full_name, "repository renamed");
             state.cache.invalidate(crate::cache::project_paths(&p.slug, &p.platform));
         }
+        if visibility_changed {
+            note_repo_visibility(state, current.id, current.private).await;
+        }
         // Stay well within the API rate limit.
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
@@ -186,6 +192,33 @@ async fn refresh_repo_names(state: &AppState) -> anyhow::Result<()> {
         tracing::info!(renamed, "refreshed repository names");
     }
     Ok(())
+}
+
+/// Called when GitHub says a repository was made private or public (a webhook): the public
+/// pages stop or start linking to it.
+pub async fn note_repo_visibility(state: &AppState, repo_id: i64, private: bool) {
+    let changed = state
+        .db
+        .run(move |c| {
+            let mut changed = Vec::new();
+            for (id, slug, platform) in db::set_repo_private(c, repo_id, private)? {
+                let versions: Vec<String> = db::versions_for_project(c, id)?.into_iter().map(|v| v.version).collect();
+                changed.push((slug, platform, versions));
+            }
+            Ok(changed)
+        })
+        .await;
+    match changed {
+        Ok(changed) => {
+            for (slug, platform, versions) in changed {
+                tracing::info!(project = %slug, private, "repository visibility changed");
+                let mut paths = crate::cache::project_paths(&slug, &platform);
+                paths.extend(versions.iter().map(|v| crate::util::version_page(&slug, v)));
+                state.cache.invalidate(paths);
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "couldn't record a repository visibility change"),
+    }
 }
 
 /// Called with what GitHub says a repository is currently called (e.g. from a webhook):

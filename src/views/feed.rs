@@ -48,7 +48,7 @@ fn item(base: &str, it: &FeedItem) -> String {
     let commit_url = it
         .commit
         .as_deref()
-        .filter(|c| is_commit_hash(c))
+        .filter(|c| is_commit_hash(c) && !it.repo_private)
         .and_then(|c| crate::db::commit_link(&it.repo_host, &it.repo, it.repo_url.as_deref(), c).map(|link| (c, link)));
     if let Some((c, link)) = commit_url {
         let _ = write!(

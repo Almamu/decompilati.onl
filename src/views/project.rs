@@ -3,18 +3,26 @@ use maud::{html, Markup, PreEscaped};
 use crate::github::{is_commit_hash, CommitList};
 
 use crate::{
-    db::{Project, ReportRow},
+    db::{Port, Project, ReportRow},
     platforms,
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{code_bar, cover, data_bar, icon_discord, icon_github, icon_repo, icon_rss, last_change, legend_code, platform_chip, vote},
+        components::{code_bar, cover, data_bar, icon_discord, icon_github, icon_lock, icon_repo, icon_rss, last_change, legend_code, platform_chip, vote},
         layout::time_ago,
         svg,
     },
 };
 
-pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_votes: bool, versions: &[String], active: &str) -> Markup {
+pub fn project(
+    p: &Project,
+    reports: &[ReportRow],
+    base_url: &str,
+    hidden_by_votes: bool,
+    versions: &[String],
+    active: &str,
+    ports: &[Port],
+) -> Markup {
     let plat = platforms::get_or_other(&p.platform);
     let areas = p.areas();
     let with_functions = any_functions(&areas);
@@ -34,7 +42,11 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
                     "by " a href={ "https://github.com/" (p.owner_login) } rel="noopener" { "@" (p.owner_login) }
                 }
                 div.link-buttons {
-                    @if p.is_github() {
+                    @if p.repo_private {
+                        span.btn.btn-private title="The source code is in a private repository" {
+                            (icon_lock()) span { "Private repository" }
+                        }
+                    } @else if p.is_github() {
                         a.btn.btn-github href=(p.repo_link()) rel="noopener" title={ "github.com/" (p.repo) } {
                             (icon_github()) span { "GitHub" }
                         }
@@ -120,6 +132,10 @@ pub fn project(p: &Project, reports: &[ReportRow], base_url: &str, hidden_by_vot
             }
             (last_change(p))
             (recent_commits(p))
+        }
+
+        @if !ports.is_empty() {
+            (ports_section(ports))
         }
 
         @if !areas.is_empty() {
@@ -254,7 +270,8 @@ fn any_functions(areas: &[Area]) -> bool {
 /// Commits fetched from GitHub after the last progress report.
 fn recent_commits(p: &Project) -> Markup {
     let list: CommitList = serde_json::from_str(&p.commits_json).unwrap_or_default();
-    if list.commits.is_empty() {
+    // Fetched while the repository was public: keep its commits private now.
+    if list.commits.is_empty() || p.repo_private {
         return html! {};
     }
     html! {
@@ -310,4 +327,33 @@ fn functions_bar(f: &crate::report::FunctionStats) -> Markup {
             span.seg.matching style={ "width:" (format!("{v:.3}")) "%" } {}
         }
     }
+}
+
+/// Ports built on the decompilation, as their owners describe them.
+fn ports_section(ports: &[Port]) -> Markup {
+    html! {
+        section.panel #ports {
+            h2 { "Ports" }
+            p.muted { "Versions of the game built from this decompilation, listed by the project. Downloads may need your own copy of the game." }
+            ul.ports {
+                @for port in ports {
+                    li.port {
+                        div.port-head {
+                            a.port-name href=(port.url) rel="noopener nofollow ugc" { (port.name) }
+                            @if !port.platforms.is_empty() { span.port-platforms { (port.platforms) } }
+                        }
+                        @if !port.description.is_empty() { p.port-desc.pre { (port.description) } }
+                        span.muted.small { (link_host(&port.url)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The site a link points to, so readers see where it goes.
+fn link_host(url: &str) -> &str {
+    let rest = url.strip_prefix("https://").unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    host.strip_prefix("www.").unwrap_or(host)
 }

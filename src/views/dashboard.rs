@@ -17,9 +17,13 @@ pub struct ProjectForm {
     pub platform: String,
     #[serde(default)]
     pub repo: String,
-    /// `github` (pick from the list) or `external` (any https URL).
+    /// `github` (pick from the list), `github-private` (typed in, checked through the GitHub
+    /// App) or `external` (any https URL).
     #[serde(default)]
     pub repo_host: String,
+    /// `owner/name` of a private GitHub repository.
+    #[serde(default)]
+    pub private_repo: String,
     #[serde(default)]
     pub repo_url: String,
     #[serde(default)]
@@ -40,8 +44,9 @@ impl ProjectForm {
         ProjectForm {
             name: p.name.clone(),
             platform: p.platform.clone(),
-            repo: if p.is_github() { p.repo.clone() } else { String::new() },
-            repo_host: p.repo_host.clone(),
+            repo: if p.is_github() && !p.repo_private { p.repo.clone() } else { String::new() },
+            repo_host: if p.repo_private { "github-private".into() } else { p.repo_host.clone() },
+            private_repo: if p.repo_private { p.repo.clone() } else { String::new() },
             repo_url: p.repo_url.clone().unwrap_or_default(),
             ai_contributions: p.ai_contributions.clone(),
             discord: p.discord.clone().unwrap_or_default(),
@@ -96,13 +101,17 @@ pub enum RepoOptions {
     Failed,
 }
 
-fn repo_field(f: &ProjectForm, repos: &RepoOptions) -> Markup {
+fn repo_field(f: &ProjectForm, repos: &RepoOptions, app_slug: Option<&str>) -> Markup {
     let external = f.repo_host == "external";
+    let private = f.repo_host == "github-private";
     html! {
         // Which of the two fields applies is shown with CSS (`:has`); without it both show.
         fieldset.repo-choice {
             legend { "Where is the code?" }
-            label.check { input type="radio" name="repo_host" value="github" checked[!external]; span { "GitHub" } }
+            label.check { input type="radio" name="repo_host" value="github" checked[!external && !private]; span { "GitHub" } }
+            @if app_slug.is_some() || private {
+                label.check { input type="radio" name="repo_host" value="github-private" checked[private]; span { "Private GitHub repository" } }
+            }
             label.check { input type="radio" name="repo_host" value="external" checked[external]; span { "Elsewhere (GitLab, Codeberg, self-hosted…)" } }
         }
         label.repo-github { "GitHub repository " span.muted { "(public repositories you can push to)" }
@@ -134,10 +143,18 @@ fn repo_field(f: &ProjectForm, repos: &RepoOptions) -> Markup {
             input type="url" name="repo_url" value=(f.repo_url) maxlength="300" placeholder="https://gitlab.com/owner/game";
             span.muted.hint { "Outside GitHub, progress is reported through the API only: the GitHub App, history imports and commit lists need a GitHub repository." }
         }
+        label.repo-private { "Private GitHub repository " span.muted { "(owner/name)" }
+            input type="text" name="private_repo" value=(f.private_repo) maxlength="140" placeholder="owner/game-decomp" autocomplete="off";
+            span.muted.hint {
+                "Install the GitHub App on it first"
+                @if let Some(slug) = app_slug { " (" a href={ "https://github.com/apps/" (slug) "/installations/new" } rel="noopener" target="_blank" { "install" } ")" }
+                ": it confirms that you can push to the repository and imports its reports. The project page shows progress only, with no links to the repository or its commits."
+            }
+        }
     }
 }
 
-fn form_fields(f: &ProjectForm, repos: &RepoOptions) -> Markup {
+fn form_fields(f: &ProjectForm, repos: &RepoOptions, app_slug: Option<&str>) -> Markup {
     html! {
         label { "Game / project name"
             input type="text" name="name" value=(f.name) required maxlength="100" placeholder="Super Mario 64";
@@ -149,7 +166,7 @@ fn form_fields(f: &ProjectForm, repos: &RepoOptions) -> Markup {
                 }
             }
         }
-        (repo_field(f, repos))
+        (repo_field(f, repos, app_slug))
         label { "Discord " span.muted { "(optional invite link)" }
             input type="url" name="discord" value=(f.discord) maxlength="200" placeholder="https://discord.gg/…";
         }
@@ -170,7 +187,7 @@ fn form_fields(f: &ProjectForm, repos: &RepoOptions) -> Markup {
     }
 }
 
-pub fn new_project(f: &ProjectForm, repos: &RepoOptions, error: Option<&str>) -> Markup {
+pub fn new_project(f: &ProjectForm, repos: &RepoOptions, app_slug: Option<&str>, error: Option<&str>) -> Markup {
     html! {
         section.narrow {
             p { a href="/dashboard" { "← Your projects" } }
@@ -178,7 +195,7 @@ pub fn new_project(f: &ProjectForm, repos: &RepoOptions, error: Option<&str>) ->
             p.muted { "Coming from decomp.dev? " a href="/docs/decomp-dev" { "Here's how to move over" } ", including your history." }
             @if let Some(e) = error { div.notice.err { (e) } }
             form.form method="post" action="/dashboard/new" enctype="multipart/form-data" {
-                (form_fields(f, repos))
+                (form_fields(f, repos, app_slug))
                 label { "Cover image " span.muted { "(required — PNG, JPEG, WebP or GIF up to 5 MB, cropped to 16:9)" }
                     input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" required;
                 }
@@ -202,6 +219,7 @@ pub fn edit_project(
     app_slug: Option<&str>,
     versions: &[String],
     import: Option<&crate::db::ImportJob>,
+    ports: &[crate::db::Port],
 ) -> Markup {
     html! {
         section.narrow {
@@ -222,7 +240,7 @@ pub fn edit_project(
                 h2 { "Details" }
                 p.muted { "Public URL: " a href={ "/projects/" (p.slug) } { (base_url) "/projects/" (p.slug) } }
                 form.form method="post" action={ "/dashboard/p/" (p.id) } {
-                    (form_fields(f, repos))
+                    (form_fields(f, repos, app_slug))
                     @if versions.len() > 1 {
                         label { "Default version " span.muted { "(shown on the homepage, listings and the badge)" }
                             select name="default_version" {
@@ -271,6 +289,8 @@ pub fn edit_project(
                     button.btn type="submit" { @if p.image.is_some() { "Replace image" } @else { "Upload" } }
                 }
             }
+
+            (ports_panel(p, ports))
 
             div.panel {
                 h2 { "Progress webhook" }
@@ -477,4 +497,55 @@ fn job_source(job: &crate::db::ImportJob) -> &'static str {
 
 fn job_unit(job: &crate::db::ImportJob) -> &'static str {
     if job.kind.starts_with("decompdev") { "history entries" } else { "workflow runs" }
+}
+
+fn port_fields(port: Option<&crate::db::Port>) -> Markup {
+    html! {
+        label { "Name"
+            input type="text" name="name" required maxlength="100" value=[port.map(|p| &p.name)] placeholder="Ship of Harkinian";
+        }
+        label { "Link " span.muted { "(website, releases or repository; https)" }
+            input type="url" name="url" required maxlength="300" value=[port.map(|p| &p.url)] placeholder="https://github.com/owner/port";
+        }
+        label { "Platforms " span.muted { "(optional)" }
+            input type="text" name="platforms" maxlength="100" value=[port.map(|p| &p.platforms)] placeholder="Windows, Linux, macOS";
+        }
+        label { "Description " span.muted { "(optional)" }
+            textarea name="description" rows="2" maxlength="500" { @if let Some(p) = port { (p.description) } }
+        }
+    }
+}
+
+/// Ports built on the decompilation, listed in their own section of the project page.
+fn ports_panel(p: &Project, ports: &[crate::db::Port]) -> Markup {
+    html! {
+        div.panel #ports {
+            h2 { "Ports" }
+            p.muted { "Native versions and other ports built from this decompilation. They're listed in a section of the project page, in this order." }
+            @for (i, port) in ports.iter().enumerate() {
+                details.port-edit {
+                    summary { strong { (port.name) } @if !port.platforms.is_empty() { " " span.muted { "(" (port.platforms) ")" } } }
+                    form.form method="post" action={ "/dashboard/p/" (p.id) "/ports/" (port.id) } {
+                        (port_fields(Some(port)))
+                        div.port-actions {
+                            button.btn type="submit" { "Save" }
+                            @if i > 0 {
+                                button.btn.btn-ghost type="submit" formaction={ "/dashboard/p/" (p.id) "/ports/" (port.id) "/up" } formnovalidate { "Move up" }
+                            }
+                            button.btn.btn-ghost type="submit" formaction={ "/dashboard/p/" (p.id) "/ports/" (port.id) "/delete" } formnovalidate { "Remove" }
+                        }
+                    }
+                }
+            }
+            @if ports.len() < crate::db::MAX_PORTS {
+                details.port-edit open[ports.is_empty()] {
+                    summary { "Add a port" }
+                    form.form method="post" action={ "/dashboard/p/" (p.id) "/ports" } {
+                        (port_fields(None))
+                        button.btn type="submit" { "Add port" }
+                    }
+                }
+            }
+        }
+    }
 }

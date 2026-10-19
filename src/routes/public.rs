@@ -163,11 +163,11 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
     let pid = p.id;
     let active = version.unwrap_or_else(|| p.default_version.clone());
     let v = active.clone();
-    let (reports, versions, owner_banned) = state
+    let (reports, versions, ports, owner_banned) = state
         .db
         .run(move |c| {
             let banned = db::owner_is_banned(c, pid)?;
-            Ok((db::reports_for_project(c, pid, &v, 20_000)?, db::versions_for_project(c, pid)?, banned))
+            Ok((db::reports_for_project(c, pid, &v, 20_000)?, db::versions_for_project(c, pid)?, db::ports_for_project(c, pid)?, banned))
         })
         .await?;
     if owner_banned {
@@ -192,7 +192,7 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
         title: &title,
         description: &desc,
         image: og_image(state, &p),
-        body: views::project::project(&shown, &reports, &state.config.base_url, hidden, &names, &active),
+        body: views::project::project(&shown, &reports, &state.config.base_url, hidden, &names, &active, &ports),
         canonical: Some(path.clone()),
         og_type: Some("article"),
         feed: Some(format!("/projects/{}/feed.xml", p.slug)),
@@ -205,7 +205,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
     cached(&state, &headers, format!("/projects/{slug}/progress.json"), || async {
         let p = load_public_project(&state, slug).await?;
         let pid = p.id;
-        let versions = state.db.run(move |c| db::versions_for_project(c, pid)).await?;
+        let (versions, ports) = state.db.run(move |c| Ok((db::versions_for_project(c, pid)?, db::ports_for_project(c, pid)?))).await?;
         let versions: serde_json::Map<String, serde_json::Value> = versions
             .iter()
             .map(|v| {
@@ -225,9 +225,10 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "slug": p.slug,
             "name": p.name,
             "platform": p.platform,
-            "repo": p.repo,
+            "repo": (!p.repo_private).then_some(&p.repo),
             "repo_host": p.repo_host,
-            "repo_url": p.repo_link(),
+            "repo_url": p.public_repo_link(),
+            "repo_private": p.repo_private,
             "ai_generated": p.ai_generated,
             "ai_contributions": if p.ai_contributions.is_empty() { None } else { Some(&p.ai_contributions) },
             "discord": p.discord,
@@ -247,6 +248,7 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
             "score": p.score(),
             "default_version": p.default_version,
             "versions": versions,
+            "ports": ports,
         });
         Ok(CachedPage::new(serde_json::to_vec(&body)?, "application/json"))
     })
@@ -421,11 +423,13 @@ fn project_json_ld(state: &AppState, p: &Project, path: &str, desc: &str) -> ser
         "name": format!("{} decompilation", p.name),
         "description": desc,
         "url": format!("{}{path}", state.config.base_url),
-        "codeRepository": p.repo_link(),
         "author": { "@type": "Person", "name": p.owner_login, "url": format!("https://github.com/{}", p.owner_login) },
         "about": { "@type": "VideoGame", "name": p.name, "gamePlatform": platform.name },
         "dateCreated": crate::util::iso_time(p.created_at),
     });
+    if let Some(repo) = p.public_repo_link() {
+        ld["codeRepository"] = repo.into();
+    }
     if let Some(t) = p.last_report_at {
         ld["dateModified"] = crate::util::iso_time(t).into();
     }

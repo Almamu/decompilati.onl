@@ -109,8 +109,10 @@ pub async fn webhook(State(state): State<AppState>, headers: HeaderMap, body: By
             repository: Repository,
         }
         if let Ok(ev) = serde_json::from_slice::<RepositoryEvent>(&body) {
-            if ev.action == "renamed" || ev.action == "transferred" {
-                crate::github::note_repo_name(&state, ev.repository.id, &ev.repository.full_name).await;
+            match ev.action.as_str() {
+                "renamed" | "transferred" => crate::github::note_repo_name(&state, ev.repository.id, &ev.repository.full_name).await,
+                "privatized" | "publicized" => crate::github::note_repo_visibility(&state, ev.repository.id, ev.action == "privatized").await,
+                _ => {}
             }
         }
         return (StatusCode::OK, "ok").into_response();
@@ -367,6 +369,63 @@ async fn installation_for_repo(state: &AppState, app: &GithubAppConfig, repo: &s
         return Ok(None);
     }
     Ok(Some(res.error_for_status()?.json::<Inst>().await?.id))
+}
+
+/// A repository registered through the GitHub App, as GitHub describes it.
+pub struct AppRepo {
+    pub full_name: String,
+    pub id: i64,
+    pub private: bool,
+}
+
+/// Checks a repository the user can't pick from their own list (a private one): the GitHub
+/// App must be installed on it, and GitHub must say the user can push to it. Logging in only
+/// grants access to public information, so the check goes through the app's installation.
+pub async fn verify_app_repo(state: &AppState, repo: &str, login: &str) -> Result<AppRepo, String> {
+    let app = state.config.github_app.clone().ok_or("Private repositories need the GitHub App, which isn't set up on this server.")?;
+    fn unreachable<E: std::fmt::Display>(e: E) -> String {
+        tracing::warn!(error = %e, "couldn't check a repository through the GitHub App");
+        "Couldn't reach GitHub, please try again.".to_string()
+    }
+    let installation = installation_for_repo(state, &app, repo)
+        .await
+        .map_err(unreachable)?
+        .ok_or_else(|| format!("The GitHub App isn't installed on {repo}. Install it there first (with access to that repository), then try again."))?;
+    let token = installation_token(state, &app, installation).await.map_err(unreachable)?;
+
+    #[derive(Deserialize)]
+    struct Repo {
+        id: i64,
+        full_name: String,
+        private: bool,
+    }
+    let info: Repo = gh_get(state, &token, &format!("https://api.github.com/repos/{repo}")).await.map_err(unreachable)?;
+
+    #[derive(Deserialize)]
+    struct Permission {
+        permission: String,
+        #[serde(default)]
+        role_name: String,
+    }
+    // 404 when the user isn't a collaborator at all.
+    let res = state
+        .http
+        .get(format!("https://api.github.com/repos/{}/collaborators/{}/permission", info.full_name, crate::auth::urlencode(login)))
+        .bearer_auth(&token)
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(unreachable)?;
+    let can_push = if res.status() == reqwest::StatusCode::NOT_FOUND {
+        false
+    } else {
+        let p: Permission = res.error_for_status().map_err(unreachable)?.json().await.map_err(unreachable)?;
+        matches!(p.permission.as_str(), "admin" | "write") || matches!(p.role_name.as_str(), "admin" | "maintain" | "write")
+    };
+    if !can_push {
+        return Err(format!("You need push access to {} to register it.", info.full_name));
+    }
+    Ok(AppRepo { full_name: info.full_name, id: info.id, private: info.private })
 }
 
 #[derive(Deserialize)]

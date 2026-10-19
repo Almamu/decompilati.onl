@@ -224,6 +224,64 @@ mod external_repo_tests {
     }
 }
 
+/// Parses a GitHub repository given as `owner/name` or its `https://github.com/owner/name` URL.
+pub fn parse_github_repo(input: &str) -> Option<String> {
+    let s = input.trim().trim_end_matches('/');
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    let s = ["https://github.com/", "http://github.com/", "https://www.github.com/", "github.com/"]
+        .iter()
+        .find_map(|p| s.strip_prefix(p))
+        .unwrap_or(s);
+    let (owner, name) = s.split_once('/')?;
+    let owner_ok = (1..=39).contains(&owner.len()) && owner.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let name_ok = (1..=100).contains(&name.len())
+        && name != "."
+        && name != ".."
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+    (owner_ok && name_ok).then(|| format!("{owner}/{name}"))
+}
+
+/// Checks a link to a web page (a port's site or download page): https only, with a host.
+pub fn normalize_web_url(input: &str) -> Result<String, &'static str> {
+    let s = input.trim();
+    let rest = s.strip_prefix("https://").ok_or("Links must start with https://")?;
+    if s.len() > 300 || s.chars().any(|c| c.is_whitespace() || c.is_control() || "\"'<>\\`".contains(c)) {
+        return Err("That doesn't look like a link.");
+    }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let valid_host = host.contains('.')
+        && host.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    if !valid_host {
+        return Err("That doesn't look like a link.");
+    }
+    Ok(s.to_string())
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::{normalize_web_url as w, parse_github_repo as g};
+
+    #[test]
+    fn repos() {
+        assert_eq!(g("Owner/Game-decomp"), Some("Owner/Game-decomp".into()));
+        assert_eq!(g("https://github.com/owner/game.git/"), Some("owner/game".into()));
+        assert_eq!(g("owner"), None);
+        assert_eq!(g("owner/game/tree/main"), None);
+        assert_eq!(g("owner/.."), None);
+        assert_eq!(g("https://gitlab.com/owner/game"), None);
+    }
+
+    #[test]
+    fn links() {
+        assert_eq!(w(" https://example.com/game?x=1#dl "), Ok("https://example.com/game?x=1#dl".into()));
+        assert!(w("http://example.com").is_err());
+        assert!(w("https://user@evil.example").is_err());
+        assert!(w("https://example.com/a b").is_err());
+        assert!(w("https://localhost/").is_err());
+        assert!(w("javascript:alert(1)").is_err());
+    }
+}
+
 /// The page of a non-default version. The unnamed version, which has no name to put in the
 /// URL, is `~` (never a valid version name).
 pub fn version_page(slug: &str, version: &str) -> String {

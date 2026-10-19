@@ -40,7 +40,8 @@ async fn repo_options(state: &AppState, u: &SessionUser, next: &str) -> RepoOpti
 
 async fn new_page(state: &AppState, u: &SessionUser, f: &ProjectForm, error: Option<&str>) -> Response {
     let repos = repo_options(state, u, "/dashboard/new").await;
-    page("Add a project", views::dashboard::new_project(f, &repos, error))
+    let app_slug = state.config.github_app.as_ref().map(|a| a.slug.as_str());
+    page("Add a project", views::dashboard::new_project(f, &repos, app_slug, error))
 }
 
 pub async fn index(State(state): State<AppState>, RequireUser(u): RequireUser) -> AppResult<Response> {
@@ -94,14 +95,33 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
     // Outside GitHub there's no push-access check and no GitHub integration: progress comes
     // through the API only.
     let external = f.repo_host == "external";
+    let mut repo_private = false;
     let (repo, github_repo_id, repo_url) = if external {
         let (display, url) = crate::util::normalize_external_repo(&f.repo_url)?;
         (display, None, Some(url))
+    } else if f.repo_host == "github-private" {
+        let typed = crate::util::parse_github_repo(&f.private_repo).ok_or("Enter the private repository as owner/name.")?;
+        match existing {
+            // Unchanged: it was checked when it was registered.
+            Some(p) if p.is_github() && p.repo_private && p.repo.eq_ignore_ascii_case(&typed) => {
+                repo_private = true;
+                (p.repo.clone(), None, None)
+            }
+            _ => {
+                let found = crate::github_app::verify_app_repo(state, &typed, &u.user.login).await?;
+                if found.full_name.split('/').next().is_some_and(crate::util::is_reserved_name) {
+                    return Err("Repositories owned by an account with a name reserved for this site's pages can't be registered.".into());
+                }
+                // A public repository entered here is registered as public.
+                repo_private = found.private;
+                (found.full_name, Some(found.id), None)
+            }
+        }
     } else {
         let selected = f.repo.trim();
         // The repository id is only known (and only changes) when one is picked from the list.
         match existing {
-            Some(p) if p.is_github() && (selected.is_empty() || p.repo.eq_ignore_ascii_case(selected)) => (p.repo.clone(), None, None),
+            Some(p) if p.is_github() && !p.repo_private && (selected.is_empty() || p.repo.eq_ignore_ascii_case(selected)) => (p.repo.clone(), None, None),
             _ => {
                 if selected.is_empty() {
                     return Err("Pick a repository.".into());
@@ -151,6 +171,7 @@ async fn validate(state: &AppState, u: &SessionUser, f: &ProjectForm, existing: 
         github_repo_id,
         repo_host: if external { "external".into() } else { "github".into() },
         repo_url,
+        repo_private,
         ai_contributions,
         discord,
         description,
@@ -176,6 +197,7 @@ async fn read_new_project_form(mut mp: Multipart) -> AppResult<(ProjectForm, Opt
             "repo" => f.repo = value,
             "repo_host" => f.repo_host = value,
             "repo_url" => f.repo_url = value,
+            "private_repo" => f.private_repo = value,
             "ai_contributions" => f.ai_contributions = value,
             "discord" => f.discord = value,
             "description" => f.description = value,
@@ -225,7 +247,7 @@ pub async fn create(State(state): State<AppState>, RequireUser(u): RequireUser, 
     }
     // Projects that were on decomp.dev bring their history along, through a background job
     // so creating the project doesn't depend on decomp.dev being up.
-    let auto_import = if project.is_github() { crate::decompdev::queue_auto_import(&state, &project, uid).await } else { Err(String::new()) };
+    let auto_import = if project.is_github() && !project.repo_private { crate::decompdev::queue_auto_import(&state, &project, uid).await } else { Err(String::new()) };
     let notice = match auto_import {
         Ok(()) => "Project created! If it was on decomp.dev, its progress history is imported in the background (see \"Import history\" below). Now set up your CI to keep reporting.",
         Err(_) => "Project created! Now set up your CI to report progress.",
@@ -243,7 +265,8 @@ async fn edit_form_page(state: &AppState, u: &SessionUser, p: &Project, f: &Proj
         .unwrap_or_default();
     let app_slug = state.config.github_app.as_ref().map(|a| a.slug.as_str());
     let import = state.db.run(move |c| db::latest_import_job(c, pid)).await.ok().flatten();
-    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, app_slug, &versions, import.as_ref()))
+    let ports = state.db.run(move |c| db::ports_for_project(c, pid)).await.unwrap_or_default();
+    page(&p.name, views::dashboard::edit_project(u, p, f, &repos, error, notice, key, &state.config.base_url, app_slug, &versions, import.as_ref(), &ports))
 }
 
 async fn edit_page(state: &AppState, u: &SessionUser, p: &Project, error: Option<&str>, notice: Option<&str>, key: Option<&str>) -> Response {
@@ -535,4 +558,100 @@ pub async fn set_app_artifacts(
         .await?
         .ok_or(AppError::NotFound)?;
     Ok(edit_page(&state, &u, &updated, None, Some("Saved which artifacts the GitHub App imports."), None).await)
+}
+
+// ---------------------------------------------------------------- ports
+
+#[derive(Deserialize)]
+pub struct PortForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    platforms: String,
+    #[serde(default)]
+    description: String,
+}
+
+fn clean_text(s: &str, max: usize, newlines: bool) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || (newlines && *c == '\n'))
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn port_input(f: &PortForm) -> Result<db::PortInput, &'static str> {
+    let name = clean_text(&f.name, 100, false);
+    if name.is_empty() {
+        return Err("Give the port a name.");
+    }
+    Ok(db::PortInput {
+        name,
+        url: crate::util::normalize_web_url(&f.url)?,
+        platforms: clean_text(&f.platforms, 100, false),
+        description: clean_text(&f.description, 500, true),
+    })
+}
+
+/// The project's pages, every version's included: ports show on all of them.
+async fn ports_changed(state: &AppState, p: &Project) {
+    let pid = p.id;
+    let versions: Vec<String> = state
+        .db
+        .run(move |c| Ok(db::versions_for_project(c, pid)?.into_iter().map(|v| v.version).collect()))
+        .await
+        .unwrap_or_default();
+    let mut paths = crate::cache::project_paths(&p.slug, &p.platform);
+    paths.extend(versions.iter().map(|v| crate::util::version_page(&p.slug, v)));
+    state.cache.invalidate_now(paths).await;
+}
+
+pub async fn add_port(State(state): State<AppState>, RequireUser(u): RequireUser, Path(id): Path<i64>, Form(f): Form<PortForm>) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    let input = match port_input(&f) {
+        Ok(i) => i,
+        Err(e) => return Ok(edit_page(&state, &u, &p, Some(e), None, None).await),
+    };
+    if !state.db.run(move |c| db::add_port(c, id, &input)).await? {
+        let msg = format!("A project can list up to {} ports.", db::MAX_PORTS);
+        return Ok(edit_page(&state, &u, &p, Some(&msg), None, None).await);
+    }
+    ports_changed(&state, &p).await;
+    Ok(edit_page(&state, &u, &p, None, Some("Port added."), None).await)
+}
+
+pub async fn update_port(
+    State(state): State<AppState>,
+    RequireUser(u): RequireUser,
+    Path((id, port)): Path<(i64, i64)>,
+    Form(f): Form<PortForm>,
+) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    let input = match port_input(&f) {
+        Ok(i) => i,
+        Err(e) => return Ok(edit_page(&state, &u, &p, Some(e), None, None).await),
+    };
+    if !state.db.run(move |c| db::update_port(c, id, port, &input)).await? {
+        return Err(AppError::NotFound);
+    }
+    ports_changed(&state, &p).await;
+    Ok(edit_page(&state, &u, &p, None, Some("Port saved."), None).await)
+}
+
+pub async fn delete_port(State(state): State<AppState>, RequireUser(u): RequireUser, Path((id, port)): Path<(i64, i64)>) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    if state.db.run(move |c| db::delete_port(c, id, port)).await? {
+        ports_changed(&state, &p).await;
+    }
+    Ok(edit_page(&state, &u, &p, None, Some("Port removed."), None).await)
+}
+
+pub async fn move_port_up(State(state): State<AppState>, RequireUser(u): RequireUser, Path((id, port)): Path<(i64, i64)>) -> AppResult<Response> {
+    let p = owned(&state, &u, id).await?;
+    state.db.run(move |c| db::move_port_up(c, id, port)).await?;
+    ports_changed(&state, &p).await;
+    Ok(edit_page(&state, &u, &p, None, Some("Port moved up."), None).await)
 }
