@@ -42,11 +42,19 @@ pub fn cover(p: &Project, eager: bool) -> Markup {
 pub fn code_bar(c: &CodeStats) -> Markup {
     let m = c.matching_pct();
     let n = c.non_matching_pct();
-    let label = format!("Code: {} matching, {} partially matching", fmt_pct(m), fmt_pct(n));
+    // Fully linked code is part of the decompiled code, mostly of the matching code: it takes
+    // the start of the bar instead of adding to it.
+    let l = c.linked_pct().min(m + n);
+    let (m_rest, n_rest) = (m - l.min(m), n - (l - l.min(m)));
+    let mut label = format!("Code: {} matching, {} partially matching", fmt_pct(m), fmt_pct(n));
+    if c.linked > 0 {
+        label = format!("Code: {} fully linked, {} matching, {} partially matching", fmt_pct(c.linked_pct()), fmt_pct(m), fmt_pct(n));
+    }
     html! {
         div.bar role="img" aria-label=(label) title=(label) {
-            span.seg.matching style={ "width:" (format!("{m:.3}")) "%" } {}
-            span.seg.nonmatching style={ "width:" (format!("{n:.3}")) "%" } {}
+            @if c.linked > 0 { span.seg.linked style={ "width:" (format!("{l:.3}")) "%" } {} }
+            span.seg.matching style={ "width:" (format!("{m_rest:.3}")) "%" } {}
+            span.seg.nonmatching style={ "width:" (format!("{n_rest:.3}")) "%" } {}
         }
     }
 }
@@ -156,6 +164,7 @@ pub fn legend_code() -> Markup {
 pub fn legend() -> Markup {
     html! {
         ul.legend {
+            li { span.sw.linked {} "Fully linked" }
             li { span.sw.matching {} "Matching" }
             li { span.sw.nonmatching {} "Partially matching" }
             li { span.sw.data {} "Data" }

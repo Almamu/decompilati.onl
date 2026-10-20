@@ -117,6 +117,7 @@ section { margin-bottom: 36px; }
 .seg { display: block; height: 100%; }
 .seg.matching { background: var(--matching); }
 .seg.nonmatching { background: var(--nonmatching); }
+.seg.linked { background: var(--linked); }
 .seg.data { background: var(--data); }
 .progress { display: grid; gap: 6px; margin: 10px 0 6px; }
 .prow { display: flex; align-items: center; gap: 8px; font-size: .82rem; }
