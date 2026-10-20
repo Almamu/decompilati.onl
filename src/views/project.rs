@@ -26,6 +26,7 @@ pub fn project(
     let plat = platforms::get_or_other(&p.platform);
     let areas = p.areas();
     let with_functions = any_functions(&areas);
+    let with_linked = any_linked(&areas);
     html! {
         @if hidden_by_votes || p.hidden {
             div.notice { "This project is hidden from listings because of its community rating or moderation." }
@@ -149,8 +150,8 @@ pub fn project(
                 details.area-table {
                     summary { "All areas as a table" }
                     table {
-                        thead { tr { th { "Area" } th { "Matching" } th { "Partially matching" } th { "Data" } @if with_functions { th.num { "Functions" } } th.num { "Size (" (p.unit) ")" } } }
-                        tbody { @for (i, a) in areas.iter().enumerate() { (area_rows(a, &format!("a{i}"), None, 0, with_functions)) } }
+                        thead { tr { th { "Area" } @if with_linked { th { "Fully linked" } } th { "Matching" } th { "Partially matching" } th { "Data" } @if with_functions { th.num { "Functions" } } th.num { "Size (" (p.unit) ")" } } }
+                        tbody { @for (i, a) in areas.iter().enumerate() { (area_rows(a, &format!("a{i}"), None, 0, with_functions, with_linked)) } }
                     }
                 }
             }
@@ -238,7 +239,7 @@ fn area_tile(a: &Area) -> Markup {
 
 /// One table row per area. Children start collapsed; the toggle in their parent's row
 /// (handled by app.js) shows them.
-fn area_rows(a: &Area, id: &str, parent: Option<&str>, depth: usize, with_functions: bool) -> Markup {
+fn area_rows(a: &Area, id: &str, parent: Option<&str>, depth: usize, with_functions: bool, with_linked: bool) -> Markup {
     html! {
         tr data-row=(id) data-parent=[parent] hidden[parent.is_some()] {
             td style={ "padding-left:" (0.5 + depth as f64 * 1.2) "em" } {
@@ -249,6 +250,7 @@ fn area_rows(a: &Area, id: &str, parent: Option<&str>, depth: usize, with_functi
                 (a.name)
                 @if !a.children.is_empty() { " " span.muted.small { "(" (a.children.len()) ")" } }
             }
+            @if with_linked { td { (fmt_pct(a.code.linked_pct())) } }
             td { (fmt_pct(a.code.matching_pct())) }
             td { (fmt_pct(a.code.non_matching_pct())) }
             td { @if a.data.total > 0 { (fmt_pct(a.data.pct())) } @else { "—" } }
@@ -258,13 +260,17 @@ fn area_rows(a: &Area, id: &str, parent: Option<&str>, depth: usize, with_functi
             td.num { (fmt_count(a.code.total)) }
         }
         @for (i, c) in a.children.iter().enumerate() {
-            (area_rows(c, &format!("{id}-{i}"), Some(id), depth + 1, with_functions))
+            (area_rows(c, &format!("{id}-{i}"), Some(id), depth + 1, with_functions, with_linked))
         }
     }
 }
 
 fn any_functions(areas: &[Area]) -> bool {
     areas.iter().any(|a| a.functions.total > 0 || any_functions(&a.children))
+}
+
+fn any_linked(areas: &[Area]) -> bool {
+    areas.iter().any(|a| a.code.linked > 0 || any_linked(&a.children))
 }
 
 /// Commits fetched from GitHub after the last progress report.

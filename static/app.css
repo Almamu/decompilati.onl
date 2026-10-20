@@ -173,6 +173,7 @@ svg.treemap { width: 100%; min-width: 560px; height: auto; display: block; }
 .t-frame { fill: none; stroke: var(--line); stroke-width: 1.5; }
 .t-match { fill: var(--matching); }
 .t-nonmatch { fill: var(--nonmatching); }
+.t-linked { fill: var(--linked); }
 .t-label { fill: var(--text); font: 600 12px var(--font); paint-order: stroke; stroke: var(--none); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .t-pct { fill: var(--text); font: 11px var(--font); paint-order: stroke; stroke: var(--none); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .t-head { fill: var(--muted); font: 600 11px var(--font); }

@@ -142,15 +142,21 @@ fn draw_area(out: &mut String, a: &Area, r: Rect, unit: &str, depth: usize) {
         draw_areas(out, &a.children, inner, unit, depth + 1);
     } else {
         let _ = write!(out, r#"<rect class="t-bg" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="2"/>"#, r.x, r.y, r.w, r.h);
-        // The map shows code only: matching from the bottom, then partially matching on top.
+        // The map shows code only: fully linked from the bottom, then the rest of matching, then
+        // partially matching on top (the same split as the progress bars).
         let (m, n) = (a.code.matching_pct() / 100.0, a.code.non_matching_pct() / 100.0);
+        let l = (a.code.linked_pct() / 100.0).min(m + n);
         let mh = r.h * m;
         let nh = r.h * n;
+        let lh = r.h * l;
         if mh > 0.0 {
             let _ = write!(out, r#"<rect class="t-match" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#, r.x, r.y + r.h - mh, r.w, mh);
         }
         if nh > 0.0 {
             let _ = write!(out, r#"<rect class="t-nonmatch" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#, r.x, r.y + r.h - mh - nh, r.w, nh);
+        }
+        if lh > 0.0 {
+            let _ = write!(out, r#"<rect class="t-linked" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#, r.x, r.y + r.h - lh, r.w, lh);
         }
         if r.h > 30.0
             && let Some(label) = fit_text(&a.name, r.w, 7.2) {
