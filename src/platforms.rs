@@ -53,6 +53,8 @@ platforms! {
     // PC
     "dos", "MS-DOS", "DOS", "PC", "#4a5568";
     "win", "Windows", "WIN", "PC", "#0078d4";
+    // Mobile
+    "android", "Android", "AND", "Mobile", "#1f8f50";
     // Others
     "pce", "PC Engine / TurboGrafx-16", "PCE", "NEC", "#e05a1c";
     "neogeo", "Neo Geo", "NEO", "SNK", "#c9a227";
