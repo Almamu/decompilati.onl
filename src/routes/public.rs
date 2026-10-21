@@ -280,6 +280,45 @@ pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Pat
     .await
 }
 
+/// `GET /projects/{slug}/report.json`: the default version's progress as an objdiff report.
+pub async fn project_report(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
+    let key = format!("/projects/{slug}/report.json");
+    cached(&state, &headers, key, || render_report(&state, slug, None)).await
+}
+
+/// `GET /projects/{slug}/versions/{version}/report.json`
+pub async fn project_version_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, version)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let key = format!("{}/report.json", crate::util::version_page(&slug, &version));
+    let version = match version.as_str() {
+        "~" => String::new(),
+        v if crate::report::valid_version(v) && !v.is_empty() => version,
+        _ => return Err(AppError::NotFound),
+    };
+    cached(&state, &headers, key, || render_report(&state, slug, Some(version))).await
+}
+
+async fn render_report(state: &AppState, slug: String, version: Option<String>) -> AppResult<Arc<CachedPage>> {
+    let p = load_public_project(state, slug).await?;
+    let pid = p.id;
+    let (versions, owner_banned) =
+        state.db.run(move |c| Ok((db::versions_for_project(c, pid)?, db::owner_is_banned(c, pid)?))).await?;
+    if owner_banned {
+        return Err(AppError::NotFound);
+    }
+    let active = version.unwrap_or_else(|| p.default_version.clone());
+    let shown = match versions.iter().find(|v| v.version == active) {
+        Some(v) => v.apply_to(&p),
+        None if active == p.default_version => p,
+        None => return Err(AppError::NotFound),
+    };
+    let body = crate::objdiff::export(&shown.code, &shown.data, &shown.functions, &shown.areas());
+    Ok(CachedPage::new(serde_json::to_vec(&body)?, "application/json"))
+}
+
 /// `GET /badge/{slug}.svg`: decompiled code of the default version.
 pub async fn badge(State(state): State<AppState>, headers: HeaderMap, Path(file): Path<String>) -> AppResult<Response> {
     let slug = file.strip_suffix(".svg").ok_or(AppError::NotFound)?.to_string();

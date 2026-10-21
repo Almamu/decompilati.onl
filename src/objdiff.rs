@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Deserializer};
 
-use crate::report::{AreaInput, CodeStats, DataStats, FunctionStats, ReportInput, MAX_AREAS};
+use crate::report::{Area, AreaInput, CodeStats, DataStats, FunctionStats, ReportInput, MAX_AREAS};
 
 /// objdiff writes 64-bit integers as strings (protobuf JSON); accept both.
 fn num<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
@@ -212,6 +212,76 @@ impl Report {
     }
 }
 
+// ---------------------------------------------------------------- export
+
+fn export_measures(code: &CodeStats, data: &DataStats, functions: &FunctionStats) -> serde_json::Value {
+    serde_json::json!({
+        "fuzzy_match_percent": code.decompiled_pct(),
+        "total_code": code.total.to_string(),
+        "matched_code": code.matching.to_string(),
+        "matched_code_percent": code.matching_pct(),
+        "total_data": data.total.to_string(),
+        "matched_data": data.done.to_string(),
+        "matched_data_percent": data.pct(),
+        "total_functions": functions.total,
+        "matched_functions": functions.matching,
+        "matched_functions_percent": functions.pct(),
+        "complete_code": code.linked.to_string(),
+        "complete_code_percent": code.linked_pct(),
+    })
+}
+
+/// Collects the leaves under `a` as units belonging to `category`, merging units listed in
+/// several categories.
+fn collect_units<'a>(a: &'a Area, category: Option<&str>, units: &mut Vec<(&'a Area, Vec<String>)>) {
+    if !a.children.is_empty() {
+        for c in &a.children {
+            collect_units(c, category, units);
+        }
+        return;
+    }
+    match units.iter_mut().find(|(u, _)| u.name == a.name) {
+        Some((_, cats)) => cats.extend(category.map(str::to_string).filter(|c| !cats.contains(c))),
+        None => units.push((a, category.map(str::to_string).into_iter().collect())),
+    }
+}
+
+/// The progress as an objdiff report (`objdiff-cli report generate`'s JSON), rebuilt from what's
+/// stored: top-level areas with children become categories and the innermost areas become units.
+/// Function and section detail isn't kept, so units only carry their measures.
+pub fn export(code: &CodeStats, data: &DataStats, functions: &FunctionStats, areas: &[Area]) -> serde_json::Value {
+    let nested = areas.iter().any(|a| !a.children.is_empty());
+    let mut categories = Vec::new();
+    let mut units = Vec::new();
+    for a in areas {
+        if nested {
+            let id = match crate::util::slugify(&a.name) {
+                s if s.is_empty() => format!("area-{}", categories.len() + 1),
+                s => s,
+            };
+            categories.push(serde_json::json!({ "id": id, "name": a.name, "measures": export_measures(&a.code, &a.data, &a.functions) }));
+            collect_units(a, Some(&id), &mut units);
+        } else {
+            collect_units(a, None, &mut units);
+        }
+    }
+    let units: Vec<serde_json::Value> = units
+        .iter()
+        .map(|(u, cats)| {
+            serde_json::json!({
+                "name": u.name,
+                "measures": export_measures(&u.code, &u.data, &u.functions),
+                "metadata": { "progress_categories": cats },
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "measures": export_measures(code, data, functions),
+        "units": units,
+        "categories": categories,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +312,16 @@ mod tests {
         assert_eq!(r.areas[0].children[0].name, "src/a");
         assert_eq!(r.areas[0].children[0].code.non_matching, 40);
         assert!(!looks_like_objdiff(br#"{"code": {"total": 1}}"#));
+
+        // Exporting and importing again keeps the figures and the categories.
+        let out = serde_json::to_vec(&export(&r.code, &r.data, &r.functions, &r.areas)).unwrap();
+        assert!(looks_like_objdiff(&out));
+        let back = serde_json::from_slice::<Report>(&out).unwrap().into_input(None, None).normalize().unwrap();
+        assert_eq!(back.code, r.code);
+        assert_eq!(back.data, r.data);
+        assert_eq!(back.functions, r.functions);
+        assert_eq!(back.areas.len(), 2);
+        assert_eq!(back.areas[0].children.len(), 2);
+        assert_eq!(back.areas[1].children[0].name, "src/b");
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     report::{Area, Layout},
     util::{fmt_count, fmt_delta, fmt_pct},
     views::{
-        components::{code_bar, cover, data_bar, icon_discord, icon_github, icon_lock, icon_repo, icon_rss, last_change, legend_code, platform_chip, vote},
+        components::{code_bar, cover, data_bar, icon_discord, icon_download, icon_github, icon_lock, icon_repo, icon_rss, last_change, legend_code, platform_chip, vote},
         layout::time_ago,
         svg,
     },
@@ -60,6 +60,11 @@ pub fn project(
                         a.btn.btn-discord href=(invite) rel="noopener nofollow" { (icon_discord()) span { "Discord" } }
                     }
                     a.btn.btn-rss href={ "/projects/" (p.slug) "/feed.xml" } title="Follow this project's progress in a feed reader" { (icon_rss()) span { "RSS" } }
+                    @if p.code.total > 0 {
+                        @let page = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, active) };
+                        a.btn.btn-ghost.btn-report href={ (page) "/report.json" } download={ (p.slug) @if active != p.default_version { "-" (active) } "-report.json" }
+                            title="Download the progress as an objdiff report (objdiff-cli report JSON)" { (icon_download()) span { "objdiff report" } }
+                    }
                 }
                 @if let Some((value, label)) = crate::db::AI_CONTRIBUTIONS.iter().find(|(v, _)| !v.is_empty() && *v == p.ai_contributions) {
                     p.ai-policy { span class={ "policy policy-" (value) } title="Whether the project accepts contributions made with AI tools" { "AI contributions: " strong { (label) } } }
