@@ -64,6 +64,8 @@ pub fn project(
                         @let page = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, active) };
                         a.btn.btn-ghost.btn-report href={ (page) "/report.json" } download={ (p.slug) @if active != p.default_version { "-" (active) } "-report.json" }
                             title="Download the progress as an objdiff report (objdiff-cli report JSON)" { (icon_download()) span { "objdiff report" } }
+                        a.btn.btn-ghost.btn-report href={ (page) "/history.json" } download={ (p.slug) @if active != p.default_version { "-" (active) } "-history.json" }
+                            title="Download the progress history in decomp.dev's format, for importing into other sites" { (icon_download()) span { "History" } }
                     }
                 }
                 @if let Some((value, label)) = crate::db::AI_CONTRIBUTIONS.iter().find(|(v, _)| !v.is_empty() && *v == p.ai_contributions) {

@@ -301,7 +301,29 @@ pub async fn project_version_report(
     cached(&state, &headers, key, || render_report(&state, slug, Some(version))).await
 }
 
-async fn render_report(state: &AppState, slug: String, version: Option<String>) -> AppResult<Arc<CachedPage>> {
+/// `GET /projects/{slug}/history.json`: the default version's history in decomp.dev's format.
+pub async fn project_history(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
+    let key = format!("/projects/{slug}/history.json");
+    cached(&state, &headers, key, || render_history(&state, slug, None)).await
+}
+
+/// `GET /projects/{slug}/versions/{version}/history.json`
+pub async fn project_version_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, version)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let key = format!("{}/history.json", crate::util::version_page(&slug, &version));
+    let version = match version.as_str() {
+        "~" => String::new(),
+        v if crate::report::valid_version(v) && !v.is_empty() => version,
+        _ => return Err(AppError::NotFound),
+    };
+    cached(&state, &headers, key, || render_history(&state, slug, Some(version))).await
+}
+
+/// The project with the given version's progress (`None`: the default version), for the exports.
+async fn export_version(state: &AppState, slug: String, version: Option<String>) -> AppResult<(Project, String)> {
     let p = load_public_project(state, slug).await?;
     let pid = p.id;
     let (versions, owner_banned) =
@@ -315,7 +337,30 @@ async fn render_report(state: &AppState, slug: String, version: Option<String>) 
         None if active == p.default_version => p,
         None => return Err(AppError::NotFound),
     };
+    Ok((shown, active))
+}
+
+async fn render_report(state: &AppState, slug: String, version: Option<String>) -> AppResult<Arc<CachedPage>> {
+    let (shown, _) = export_version(state, slug, version).await?;
     let body = crate::objdiff::export(&shown.code, &shown.data, &shown.functions, &shown.areas());
+    Ok(CachedPage::new(serde_json::to_vec(&body)?, "application/json"))
+}
+
+async fn render_history(state: &AppState, slug: String, version: Option<String>) -> AppResult<Arc<CachedPage>> {
+    let (shown, active) = export_version(state, slug, version).await?;
+    let pid = shown.id;
+    let reports = state.db.run(move |c| db::reports_for_project(c, pid, &active, 100_000)).await?;
+    // Newest first, like decomp.dev. Function counts are only kept for the latest report.
+    let latest = reports.last().map(|r| r.created_at);
+    let none = crate::report::FunctionStats::default();
+    let body: Vec<serde_json::Value> = reports
+        .iter()
+        .rev()
+        .map(|r| {
+            let functions = if Some(r.created_at) == latest { &shown.functions } else { &none };
+            crate::objdiff::history_entry(r.created_at, r.commit.as_deref(), r.message.as_deref(), &r.code, &r.data, functions)
+        })
+        .collect();
     Ok(CachedPage::new(serde_json::to_vec(&body)?, "application/json"))
 }
 

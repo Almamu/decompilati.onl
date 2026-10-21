@@ -355,6 +355,7 @@ fn badges(base_url: &str) -> Markup {
         h2 { "Progress JSON" }
         p { code { "GET /projects/{slug}/progress.json" } " returns a project's current progress: code, data and functions, the areas, the last report and every version." }
         p { code { "GET /projects/{slug}/report.json" } " (or " code { "…/versions/{version}/report.json" } ") returns the same progress as an objdiff report, in the JSON format of " code { "objdiff-cli report generate" } ", with areas as categories and units. It's rebuilt from what the site keeps, so units carry their totals but no per-function detail." }
+        p { code { "GET /projects/{slug}/history.json" } " (or " code { "…/versions/{version}/history.json" } ") returns every report of a version, newest first, in decomp.dev's history format (" code { "?mode=history" } "): the file that sites such as ByteMatch import as history." }
 
         h2 { "Feeds" }
         ul {

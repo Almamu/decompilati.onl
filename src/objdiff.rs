@@ -231,6 +231,25 @@ fn export_measures(code: &CodeStats, data: &DataStats, functions: &FunctionStats
     })
 }
 
+/// One entry of a decomp.dev-style history (`/{owner}/{repo}/{version}.json?mode=history`), the
+/// format ByteMatch and decomp.dev import. Unlike objdiff's report, counts are plain numbers.
+pub fn history_entry(at: i64, commit: Option<&str>, message: Option<&str>, code: &CodeStats, data: &DataStats, functions: &FunctionStats) -> serde_json::Value {
+    let mut measures = export_measures(code, data, functions);
+    if let Some(m) = measures.as_object_mut() {
+        for v in m.values_mut() {
+            if let Some(n) = v.as_str().and_then(|s| s.parse::<u64>().ok()) {
+                *v = n.into();
+            }
+        }
+    }
+    serde_json::json!({
+        "timestamp": crate::util::iso_time(at),
+        "commit_sha": commit,
+        "commit_message": message,
+        "measures": measures,
+    })
+}
+
 /// Collects the leaves under `a` as units belonging to `category`, merging units listed in
 /// several categories.
 fn collect_units<'a>(a: &'a Area, category: Option<&str>, units: &mut Vec<(&'a Area, Vec<String>)>) {

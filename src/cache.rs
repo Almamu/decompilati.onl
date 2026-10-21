@@ -151,6 +151,7 @@ pub fn project_paths(slug: &str, platform: &str) -> Vec<String> {
         format!("/projects/{slug}/progress.json"),
         format!("/projects/{slug}/feed.xml"),
         format!("/projects/{slug}/report.json"),
+        format!("/projects/{slug}/history.json"),
         format!("/badge/{slug}.svg"),
         format!("/badge/{slug}/matching.svg"),
         format!("/badge/{slug}/data.svg"),
@@ -246,5 +247,6 @@ pub fn version_paths(slug: &str, platform: &str, version: &str) -> Vec<String> {
     let mut paths = project_paths(slug, platform);
     paths.push(crate::util::version_page(slug, version));
     paths.push(format!("{}/report.json", crate::util::version_page(slug, version)));
+    paths.push(format!("{}/history.json", crate::util::version_page(slug, version)));
     paths
 }
