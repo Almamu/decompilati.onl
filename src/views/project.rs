@@ -19,6 +19,7 @@ pub fn project(
     reports: &[ReportRow],
     links: &[String],
     at: Option<&AtCommit>,
+    page: usize,
     base_url: &str,
     hidden_by_votes: bool,
     versions: &[String],
@@ -62,7 +63,7 @@ pub fn project(
                         a.btn.btn-discord href=(invite) rel="noopener nofollow" { (icon_discord()) span { "Discord" } }
                     }
                     a.btn.btn-rss href={ "/projects/" (p.slug) "/feed.xml" } title="Follow this project's progress in a feed reader" { (icon_rss()) span { "RSS" } }
-                    @if p.code.total > 0 && at.is_none() {
+                    @if p.code.total > 0 && !at.is_some_and(|a| a.past) {
                         @let page = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, active) };
                         a.btn.btn-ghost.btn-report href={ (page) "/report.json" } download={ (p.slug) @if active != p.default_version { "-" (active) } "-report.json" }
                             title="Download the progress as an objdiff report (objdiff-cli report JSON)" { (icon_download()) span { "objdiff report" } }
@@ -94,7 +95,7 @@ pub fn project(
         @if let Some(a) = at {
             section.at-commit {
                 div.at-what {
-                    "Progress as of "
+                    @if a.past { "Progress as of " } @else { "Latest report: " }
                     @if let Some(c) = &a.report.commit { (commit_ref(p, c)) " · " }
                     (time_ago(a.report.created_at))
                     @if let Some(m) = &a.report.message { div.at-message.muted { (m.lines().next().unwrap_or("")) } }
@@ -103,7 +104,7 @@ pub fn project(
                 nav.at-nav aria-label="Commits" {
                     @if let Some(h) = &a.older { a.btn.btn-ghost href=(h) rel="prev" { "← Older" } } @else { span.btn.btn-ghost.disabled { "← Older" } }
                     @if let Some(h) = &a.newer { a.btn.btn-ghost href=(h) rel="next" { "Newer →" } } @else { span.btn.btn-ghost.disabled { "Newer →" } }
-                    a.btn href=(a.latest) { "Latest" }
+                    @if let Some(h) = &a.latest { a.btn href=(h) { "Latest" } } @else { span.btn.disabled { "Latest" } }
                 }
             }
         }
@@ -199,14 +200,28 @@ pub fn project(
 
         @if !reports.is_empty() {
             @let cols = ReportColumns::for_reports(reports);
-            section.panel {
-                h2 { @if at.is_some() { "Reports up to this one" } @else { "Recent reports" } }
+            @let pages = reports.len().div_ceil(REPORTS_PER_PAGE);
+            @let page = page.clamp(1, pages);
+            @let here = at.map_or("", |a| a.here.as_str());
+            @let page_link = |n: usize| if n == 1 { format!("{here}#reports") } else { format!("{here}?page={n}#reports") };
+            section.panel #reports {
+                h2 {
+                    @if at.is_some_and(|a| a.past) { "Reports up to this one" } @else { "Reports" }
+                    " " span.muted.small { "(" (fmt_count(reports.len() as u64)) ")" }
+                }
                 table.reports {
                     (cols.head())
                     tbody {
-                        @for (i, r) in reports.iter().enumerate().rev().take(15) {
-                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols, links.get(i).map(String::as_str), at.is_some_and(|a| a.report.id == r.id)))
+                        @for (i, r) in reports.iter().enumerate().rev().skip((page - 1) * REPORTS_PER_PAGE).take(REPORTS_PER_PAGE) {
+                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols, links.get(i).map(String::as_str), at.is_some_and(|a| a.past && a.report.id == r.id)))
                         }
+                    }
+                }
+                @if pages > 1 {
+                    nav.pager aria-label="Report pages" {
+                        @if page > 1 { a.btn.btn-ghost href=(page_link(page - 1)) rel="prev" { "← Newer" } } @else { span.btn.btn-ghost.disabled { "← Newer" } }
+                        span.muted { "Page " (page) " of " (pages) }
+                        @if page < pages { a.btn.btn-ghost href=(page_link(page + 1)) rel="next" { "Older →" } } @else { span.btn.btn-ghost.disabled { "Older →" } }
                     }
                 }
             }
@@ -378,14 +393,21 @@ fn link_host(url: &str) -> &str {
     host.strip_prefix("www.").unwrap_or(host)
 }
 
-/// The report a project page is showing when it's not the latest one.
+/// Rows per page of the report list.
+const REPORTS_PER_PAGE: usize = 20;
+
+/// The report a project page is showing, with the links to the ones around it.
 pub struct AtCommit {
     pub report: ReportRow,
     /// Links to the reports before and after it.
     pub older: Option<String>,
     pub newer: Option<String>,
-    /// The page with the latest progress.
-    pub latest: String,
+    /// The page with the latest progress; `None` on that page.
+    pub latest: Option<String>,
+    /// This page's own address, for the report list's pages.
+    pub here: String,
+    /// Showing an earlier report rather than the latest.
+    pub past: bool,
     /// The report's areas weren't stored (it's from before they were kept per report).
     pub areas_missing: bool,
 }

@@ -4,7 +4,7 @@
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -163,15 +163,31 @@ async fn load_public_project(state: &AppState, slug: String) -> AppResult<Projec
     state.db.run(move |c| db::project_by_slug(c, &slug)).await?.ok_or(AppError::NotFound)
 }
 
-pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
+#[derive(serde::Deserialize, Default)]
+pub struct PageQuery {
+    page: Option<usize>,
+}
+
+impl PageQuery {
+    fn page(&self) -> usize {
+        self.page.unwrap_or(1).max(1)
+    }
+}
+
+pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>, Query(q): Query<PageQuery>) -> AppResult<Response> {
     let key = format!("/projects/{slug}");
-    cached(&state, &headers, key, || render_project(&state, slug, None, None)).await
+    let page = q.page();
+    if page > 1 {
+        return uncached(&state, &headers, render_project(&state, slug, None, None, page).await?);
+    }
+    cached(&state, &headers, key, || render_project(&state, slug, None, None, 1)).await
 }
 
 pub async fn project_version(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((slug, version)): Path<(String, String)>,
+    Query(q): Query<PageQuery>,
 ) -> AppResult<Response> {
     let key = format!("/projects/{slug}/versions/{version}");
     let version = match version.as_str() {
@@ -179,12 +195,16 @@ pub async fn project_version(
         v if crate::report::valid_version(v) && !v.is_empty() => version,
         _ => return Err(AppError::NotFound),
     };
-    cached(&state, &headers, key, || render_project(&state, slug, Some(version), None)).await
+    let page = q.page();
+    if page > 1 {
+        return uncached(&state, &headers, render_project(&state, slug, Some(version), None, page).await?);
+    }
+    cached(&state, &headers, key, || render_project(&state, slug, Some(version), None, 1)).await
 }
 
 /// A project page for one version (`None`: the default version), as of its latest report or,
 /// with `at`, as of an earlier one (a key from `views::project::report_keys`).
-async fn render_project(state: &AppState, slug: String, version: Option<String>, at: Option<String>) -> AppResult<Arc<CachedPage>> {
+async fn render_project(state: &AppState, slug: String, version: Option<String>, at: Option<String>, page: usize) -> AppResult<Arc<CachedPage>> {
     let p = load_public_project(state, slug).await?;
     let pid = p.id;
     let active = version.unwrap_or_else(|| p.default_version.clone());
@@ -242,15 +262,29 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>,
             report: r,
             older: idx.checked_sub(1).map(|i| links[i].clone()),
             newer: links.get(idx + 1).cloned(),
-            latest: base.clone(),
+            latest: Some(base.clone()),
+            here: links[idx].clone(),
+            past: true,
             areas_missing: areas.is_none(),
         });
         reports.truncate(idx + 1);
         links.truncate(idx + 1);
+    } else if let Some(r) = reports.last() {
+        // The latest report, with the way back through the earlier ones.
+        at_commit = Some(views::project::AtCommit {
+            report: r.clone(),
+            older: reports.len().checked_sub(2).map(|i| links[i].clone()),
+            newer: None,
+            latest: None,
+            here: base.clone(),
+            past: false,
+            areas_missing: false,
+        });
     }
+    let past = at_commit.as_ref().is_some_and(|a| a.past);
 
     let mut title = if active != p.default_version { format!("{} ({active})", p.name) } else { p.name.clone() };
-    if let Some(a) = &at_commit {
+    if let Some(a) = at_commit.as_ref().filter(|a| a.past) {
         let when = &crate::util::human_date(a.report.created_at)[..10];
         title = match a.report.commit.as_deref() {
             Some(c) => format!("{title} at {} ({when})", &c[..7.min(c.len())]),
@@ -267,11 +301,11 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>,
         title: &title,
         description: &desc,
         image: og_image(state, &p),
-        body: views::project::project(&shown, &reports, &links, at_commit.as_ref(), &state.config.base_url, hidden, &names, &active, &ports),
-        canonical: at_commit.is_none().then(|| base.clone()),
+        body: views::project::project(&shown, &reports, &links, at_commit.as_ref(), page, &state.config.base_url, hidden, &names, &active, &ports),
+        canonical: (!past).then(|| base.clone()),
         og_type: Some("article"),
         feed: Some(format!("/projects/{}/feed.xml", p.slug)),
-        json_ld: at_commit.is_none().then(|| project_json_ld(state, &shown, &base, &desc)),
+        json_ld: (!past).then(|| project_json_ld(state, &shown, &base, &desc)),
     });
     Ok(CachedPage::new(html, HTML))
 }
@@ -281,8 +315,9 @@ pub async fn project_commit(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((slug, key)): Path<(String, String)>,
+    Query(q): Query<PageQuery>,
 ) -> AppResult<Response> {
-    commit_response(&state, &headers, slug, None, key).await
+    commit_response(&state, &headers, slug, None, key, q.page()).await
 }
 
 /// `GET /projects/{slug}/versions/{version}/commit/{key}`
@@ -290,22 +325,27 @@ pub async fn project_version_commit(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((slug, version, key)): Path<(String, String, String)>,
+    Query(q): Query<PageQuery>,
 ) -> AppResult<Response> {
     let version = match version.as_str() {
         "~" => String::new(),
         v if crate::report::valid_version(v) && !v.is_empty() => version,
         _ => return Err(AppError::NotFound),
     };
-    commit_response(&state, &headers, slug, Some(version), key).await
+    commit_response(&state, &headers, slug, Some(version), key, q.page()).await
 }
 
-/// Past commits aren't kept in the page cache (there are too many, and the links to newer
-/// commits change as reports arrive); browsers and the edge keep them briefly.
-async fn commit_response(state: &AppState, headers: &HeaderMap, slug: String, version: Option<String>, key: String) -> AppResult<Response> {
+/// Past commits aren't kept in the page cache: there are too many, and the links to newer
+/// commits change as reports arrive.
+async fn commit_response(state: &AppState, headers: &HeaderMap, slug: String, version: Option<String>, key: String, page: usize) -> AppResult<Response> {
     if key.len() > 64 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Err(AppError::NotFound);
     }
-    let page = render_project(state, slug, version, Some(key)).await?;
+    uncached(state, headers, render_project(state, slug, version, Some(key), page).await?)
+}
+
+/// Responds with a page left out of the page cache, which browsers and the edge keep briefly.
+fn uncached(state: &AppState, headers: &HeaderMap, page: Arc<CachedPage>) -> AppResult<Response> {
     let mut res = state.cache.respond(&page, headers);
     res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=300"));
     Ok(res)

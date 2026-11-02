@@ -379,3 +379,4 @@ section > .search { margin: 0 0 12px; }
 .btn.disabled { opacity: .45; pointer-events: none; }
 .reports tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .history-wrap.linked svg { cursor: pointer; }
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
