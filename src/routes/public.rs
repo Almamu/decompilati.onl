@@ -4,7 +4,7 @@
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -165,7 +165,7 @@ async fn load_public_project(state: &AppState, slug: String) -> AppResult<Projec
 
 pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
     let key = format!("/projects/{slug}");
-    cached(&state, &headers, key, || render_project(&state, slug, None)).await
+    cached(&state, &headers, key, || render_project(&state, slug, None, None)).await
 }
 
 pub async fn project_version(
@@ -179,34 +179,84 @@ pub async fn project_version(
         v if crate::report::valid_version(v) && !v.is_empty() => version,
         _ => return Err(AppError::NotFound),
     };
-    cached(&state, &headers, key, || render_project(&state, slug, Some(version))).await
+    cached(&state, &headers, key, || render_project(&state, slug, Some(version), None)).await
 }
 
-/// A project page for one version (`None`: the default version).
-async fn render_project(state: &AppState, slug: String, version: Option<String>) -> AppResult<Arc<CachedPage>> {
+/// A project page for one version (`None`: the default version), as of its latest report or,
+/// with `at`, as of an earlier one (a key from `views::project::report_keys`).
+async fn render_project(state: &AppState, slug: String, version: Option<String>, at: Option<String>) -> AppResult<Arc<CachedPage>> {
     let p = load_public_project(state, slug).await?;
     let pid = p.id;
     let active = version.unwrap_or_else(|| p.default_version.clone());
     let v = active.clone();
-    let (reports, versions, ports, owner_banned) = state
+    // A past commit can be anywhere in the history; the latest page only charts the recent part.
+    let limit = if at.is_some() { 1_000_000 } else { 20_000 };
+    let (mut reports, versions, ports, owner_banned) = state
         .db
         .run(move |c| {
             let banned = db::owner_is_banned(c, pid)?;
-            Ok((db::reports_for_project(c, pid, &v, 20_000)?, db::versions_for_project(c, pid)?, db::ports_for_project(c, pid)?, banned))
+            Ok((db::reports_for_project(c, pid, &v, limit)?, db::versions_for_project(c, pid)?, db::ports_for_project(c, pid)?, banned))
         })
         .await?;
     if owner_banned {
         return Err(AppError::NotFound);
     }
     // Show the requested version's progress; the default version is already in `p`.
-    let shown = match versions.iter().find(|v| v.version == active) {
+    let mut shown = match versions.iter().find(|v| v.version == active) {
         Some(v) => v.apply_to(&p),
         None if active == p.default_version => p.clone(),
         None => return Err(AppError::NotFound),
     };
     let names: Vec<String> = versions.iter().map(|v| v.version.clone()).collect();
-    let path = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, &active) };
-    let title = if active != p.default_version { format!("{} ({active})", p.name) } else { p.name.clone() };
+    let base = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, &active) };
+    let keys = views::project::report_keys(&reports);
+    let mut links: Vec<String> = keys.iter().map(|k| format!("{base}/commit/{k}")).collect();
+
+    let mut at_commit = None;
+    if let Some(key) = at {
+        let idx = views::project::find_report(&reports, &key).ok_or(AppError::NotFound)?;
+        let r = reports[idx].clone();
+        let latest = idx + 1 == reports.len();
+        let areas = if r.has_areas {
+            let id = r.id;
+            state.db.run(move |c| db::report_areas(c, pid, id)).await?
+        } else {
+            None
+        };
+        // What the page compares with: the last earlier report that moved the figures.
+        let prev = reports[..idx].iter().rev().find(|q| q.code != r.code || q.data != r.data);
+        shown = db::Project {
+            code: r.code,
+            data: r.data,
+            functions: if r.functions.total == 0 && latest { shown.functions } else { r.functions },
+            prev_code: prev.map_or(r.code, |q| q.code),
+            prev_data: prev.map_or(r.data, |q| q.data),
+            areas_json: areas.clone().unwrap_or_else(|| "[]".into()),
+            last_report_at: Some(r.created_at),
+            last_commit: r.commit.clone(),
+            last_message: r.message.clone(),
+            commits_json: "{}".into(),
+            ..shown
+        };
+        at_commit = Some(views::project::AtCommit {
+            report: r,
+            older: idx.checked_sub(1).map(|i| links[i].clone()),
+            newer: links.get(idx + 1).cloned(),
+            latest: base.clone(),
+            areas_missing: areas.is_none(),
+        });
+        reports.truncate(idx + 1);
+        links.truncate(idx + 1);
+    }
+
+    let mut title = if active != p.default_version { format!("{} ({active})", p.name) } else { p.name.clone() };
+    if let Some(a) = &at_commit {
+        let when = &crate::util::human_date(a.report.created_at)[..10];
+        title = match a.report.commit.as_deref() {
+            Some(c) => format!("{title} at {} ({when})", &c[..7.min(c.len())]),
+            None => format!("{title} on {when}"),
+        };
+    }
     let desc = format!(
         "{title} decompilation: {} code decompiled ({} matching).",
         crate::util::fmt_pct(shown.code.decompiled_pct()),
@@ -217,13 +267,61 @@ async fn render_project(state: &AppState, slug: String, version: Option<String>)
         title: &title,
         description: &desc,
         image: og_image(state, &p),
-        body: views::project::project(&shown, &reports, &state.config.base_url, hidden, &names, &active, &ports),
-        canonical: Some(path.clone()),
+        body: views::project::project(&shown, &reports, &links, at_commit.as_ref(), &state.config.base_url, hidden, &names, &active, &ports),
+        canonical: at_commit.is_none().then(|| base.clone()),
         og_type: Some("article"),
         feed: Some(format!("/projects/{}/feed.xml", p.slug)),
-        json_ld: Some(project_json_ld(state, &shown, &path, &desc)),
+        json_ld: at_commit.is_none().then(|| project_json_ld(state, &shown, &base, &desc)),
     });
     Ok(CachedPage::new(html, HTML))
+}
+
+/// `GET /projects/{slug}/commit/{key}`: the project page as of an earlier report.
+pub async fn project_commit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, key)): Path<(String, String)>,
+) -> AppResult<Response> {
+    commit_response(&state, &headers, slug, None, key).await
+}
+
+/// `GET /projects/{slug}/versions/{version}/commit/{key}`
+pub async fn project_version_commit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, version, key)): Path<(String, String, String)>,
+) -> AppResult<Response> {
+    let version = match version.as_str() {
+        "~" => String::new(),
+        v if crate::report::valid_version(v) && !v.is_empty() => version,
+        _ => return Err(AppError::NotFound),
+    };
+    commit_response(&state, &headers, slug, Some(version), key).await
+}
+
+/// Past commits aren't kept in the page cache (there are too many, and the links to newer
+/// commits change as reports arrive); browsers and the edge keep them briefly.
+async fn commit_response(state: &AppState, headers: &HeaderMap, slug: String, version: Option<String>, key: String) -> AppResult<Response> {
+    if key.len() > 64 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(AppError::NotFound);
+    }
+    let page = render_project(state, slug, version, Some(key)).await?;
+    let mut res = state.cache.respond(&page, headers);
+    res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=300"));
+    Ok(res)
+}
+
+/// The old `/history` list: the project page now shows any commit itself.
+pub async fn project_history_page(Path(slug): Path<String>) -> Response {
+    permanent_redirect(format!("/projects/{slug}"))
+}
+
+pub async fn project_version_history_page(Path((slug, version)): Path<(String, String)>) -> Response {
+    permanent_redirect(crate::util::version_page(&slug, &version))
+}
+
+fn permanent_redirect(target: String) -> Response {
+    (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, target), (header::CACHE_CONTROL, "public, max-age=86400".to_string())]).into_response()
 }
 
 pub async fn project_json(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
@@ -301,75 +399,6 @@ pub async fn project_version_report(
     cached(&state, &headers, key, || render_report(&state, slug, Some(version))).await
 }
 
-#[derive(serde::Deserialize, Default)]
-pub struct HistoryQuery {
-    page: Option<usize>,
-    changes: Option<String>,
-}
-
-/// `GET /projects/{slug}/history`: every report of the default version.
-pub async fn project_history_page(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(slug): Path<String>,
-    Query(q): Query<HistoryQuery>,
-) -> AppResult<Response> {
-    let key = format!("/projects/{slug}/history");
-    history_response(&state, &headers, key, slug, None, q).await
-}
-
-/// `GET /projects/{slug}/versions/{version}/history`
-pub async fn project_version_history_page(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((slug, version)): Path<(String, String)>,
-    Query(q): Query<HistoryQuery>,
-) -> AppResult<Response> {
-    let key = format!("{}/history", crate::util::version_page(&slug, &version));
-    let version = match version.as_str() {
-        "~" => String::new(),
-        v if crate::report::valid_version(v) && !v.is_empty() => version,
-        _ => return Err(AppError::NotFound),
-    };
-    history_response(&state, &headers, key, slug, Some(version), q).await
-}
-
-/// The first page is cached (and purged with the project); other pages and the filtered view
-/// are rendered on demand, since a new report shifts every page.
-async fn history_response(state: &AppState, headers: &HeaderMap, key: String, slug: String, version: Option<String>, q: HistoryQuery) -> AppResult<Response> {
-    let page = q.page.unwrap_or(1).max(1);
-    let only_changes = q.changes.as_deref().is_some_and(|v| v == "1" || v == "true");
-    let render = || async {
-        let (shown, active) = export_version(state, slug, version).await?;
-        let pid = shown.id;
-        let v = active.clone();
-        let (reports, versions) = state
-            .db
-            .run(move |c| Ok((db::reports_for_project(c, pid, &v, 1_000_000)?, db::versions_for_project(c, pid)?)))
-            .await?;
-        let names: Vec<String> = versions.iter().map(|v| v.version.clone()).collect();
-        let name = if active != shown.default_version { format!("{} ({active})", shown.name) } else { shown.name.clone() };
-        let html = views::layout::render(Page {
-            title: &format!("{name} history"),
-            description: &format!("Progress of {name} at every reported commit."),
-            image: og_image(state, &shown),
-            body: views::project::history_page(&shown, &reports, &names, &active, page, only_changes),
-            canonical: (page == 1 && !only_changes).then(|| key.clone()),
-            og_type: None,
-            feed: Some(format!("/projects/{}/feed.xml", shown.slug)),
-            json_ld: None,
-        });
-        Ok(CachedPage::new(html, HTML))
-    };
-    if page == 1 && !only_changes {
-        return cached(state, headers, key.clone(), render).await;
-    }
-    let page = render().await?;
-    let mut res = state.cache.respond(&page, headers);
-    res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=300"));
-    Ok(res)
-}
-
 /// `GET /projects/{slug}/history.json`: the default version's history in decomp.dev's format.
 pub async fn project_history(State(state): State<AppState>, headers: HeaderMap, Path(slug): Path<String>) -> AppResult<Response> {
     let key = format!("/projects/{slug}/history.json");
@@ -419,14 +448,14 @@ async fn render_history(state: &AppState, slug: String, version: Option<String>)
     let (shown, active) = export_version(state, slug, version).await?;
     let pid = shown.id;
     let reports = state.db.run(move |c| db::reports_for_project(c, pid, &active, 100_000)).await?;
-    // Newest first, like decomp.dev. Function counts are only kept for the latest report.
-    let latest = reports.last().map(|r| r.created_at);
-    let none = crate::report::FunctionStats::default();
+    // Newest first, like decomp.dev. Reports from before function counts were kept per report
+    // have none, except the latest.
+    let latest = reports.last().map(|r| r.id);
     let body: Vec<serde_json::Value> = reports
         .iter()
         .rev()
         .map(|r| {
-            let functions = if Some(r.created_at) == latest { &shown.functions } else { &none };
+            let functions = if r.functions.total == 0 && Some(r.id) == latest { &shown.functions } else { &r.functions };
             crate::objdiff::history_entry(r.created_at, r.commit.as_deref(), r.message.as_deref(), &r.code, &r.data, functions)
         })
         .collect();

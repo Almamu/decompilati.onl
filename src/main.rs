@@ -48,6 +48,8 @@ fn router(state: AppState) -> Router {
         .route("/projects/{slug}/versions/{version}", get(public::project_version))
         .route("/projects/{slug}/report.json", get(public::project_report))
         .route("/projects/{slug}/versions/{version}/report.json", get(public::project_version_report))
+        .route("/projects/{slug}/commit/{key}", get(public::project_commit))
+        .route("/projects/{slug}/versions/{version}/commit/{key}", get(public::project_version_commit))
         .route("/projects/{slug}/history", get(public::project_history_page))
         .route("/projects/{slug}/versions/{version}/history", get(public::project_version_history_page))
         .route("/projects/{slug}/history.json", get(public::project_history))

@@ -184,18 +184,21 @@ pub fn treemap(areas: &[Area], unit: &str) -> String {
 const MAX_POINTS: usize = 600;
 
 /// Every `n`-th report, always keeping the first and the last.
-fn thin(rows: &[ReportRow]) -> Vec<&ReportRow> {
-    if rows.len() <= MAX_POINTS {
-        return rows.iter().collect();
+/// Indexes of the reports drawn: all of them, or an even sample of long histories.
+fn thin(len: usize) -> Vec<usize> {
+    if len <= MAX_POINTS {
+        return (0..len).collect();
     }
-    let step = rows.len() as f64 / (MAX_POINTS - 1) as f64;
-    let mut out: Vec<&ReportRow> = (0..MAX_POINTS - 1).map(|i| &rows[(i as f64 * step) as usize]).collect();
-    out.push(rows.last().unwrap());
+    let step = len as f64 / (MAX_POINTS - 1) as f64;
+    let mut out: Vec<usize> = (0..MAX_POINTS - 1).map(|i| (i as f64 * step) as usize).collect();
+    out.push(len - 1);
     out
 }
 
-pub fn history(all_rows: &[ReportRow]) -> String {
-    let rows = thin(all_rows);
+/// `links` (one per report, or empty) are where clicking each point of the chart goes.
+pub fn history(all_rows: &[ReportRow], links: &[String]) -> String {
+    let picked = thin(all_rows.len());
+    let rows: Vec<&ReportRow> = picked.iter().map(|&i| &all_rows[i]).collect();
     let rows = rows.as_slice();
     const W: f64 = 800.0;
     const H: f64 = 240.0;
@@ -253,11 +256,13 @@ pub fn history(all_rows: &[ReportRow]) -> String {
     let _ = write!(out, r#"<line class="h-cursor" x1="0" x2="0" y1="{T}" y2="{}" visibility="hidden"/>"#, H - B);
     out.push_str("</svg>");
 
-    // The data behind the chart, for app.js's hover tooltip: geometry, then one
-    // [time, decompiled %, matching %, data % or null, commit, fully linked % or null] row per report.
-    let points: Vec<serde_json::Value> = rows
+    // The data behind the chart, for app.js's hover tooltip and clicks: geometry, then one
+    // [time, decompiled %, matching %, data % or null, commit, fully linked % or null, link or null]
+    // row per report.
+    let points: Vec<serde_json::Value> = picked
         .iter()
-        .map(|r| {
+        .map(|&i| {
+            let r = &all_rows[i];
             let round = |v: f64| (v * 100.0).round() / 100.0;
             serde_json::json!([
                 r.created_at,
@@ -266,12 +271,14 @@ pub fn history(all_rows: &[ReportRow]) -> String {
                 if has_data { Some(round(r.data.pct())) } else { None },
                 r.commit.as_deref().map(|c| &c[..7.min(c.len())]),
                 if has_linked { Some(round(r.code.linked_pct())) } else { None },
+                links.get(i),
             ])
         })
         .collect();
     let chart = serde_json::json!({ "w": W, "l": L, "r": R, "t0": t0, "t1": t1, "points": points });
     format!(
-        r#"<div class="history-wrap" data-chart="{}">{out}<div class="h-tip" hidden></div></div>"#,
+        r#"<div class="history-wrap{}" data-chart="{}">{out}<div class="h-tip" hidden></div></div>"#,
+        if links.is_empty() { "" } else { " linked" },
         esc(&chart.to_string())
     )
 }

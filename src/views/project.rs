@@ -17,6 +17,8 @@ use crate::{
 pub fn project(
     p: &Project,
     reports: &[ReportRow],
+    links: &[String],
+    at: Option<&AtCommit>,
     base_url: &str,
     hidden_by_votes: bool,
     versions: &[String],
@@ -60,7 +62,7 @@ pub fn project(
                         a.btn.btn-discord href=(invite) rel="noopener nofollow" { (icon_discord()) span { "Discord" } }
                     }
                     a.btn.btn-rss href={ "/projects/" (p.slug) "/feed.xml" } title="Follow this project's progress in a feed reader" { (icon_rss()) span { "RSS" } }
-                    @if p.code.total > 0 {
+                    @if p.code.total > 0 && at.is_none() {
                         @let page = if active == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, active) };
                         a.btn.btn-ghost.btn-report href={ (page) "/report.json" } download={ (p.slug) @if active != p.default_version { "-" (active) } "-report.json" }
                             title="Download the progress as an objdiff report (objdiff-cli report JSON)" { (icon_download()) span { "objdiff report" } }
@@ -85,6 +87,23 @@ pub fn project(
                         @if v.is_empty() { "(unnamed)" } @else { (v) }
                         @if *v == p.default_version { span.muted { " ★" } }
                     }
+                }
+            }
+        }
+
+        @if let Some(a) = at {
+            section.at-commit {
+                div.at-what {
+                    "Progress as of "
+                    @if let Some(c) = &a.report.commit { (commit_ref(p, c)) " · " }
+                    (time_ago(a.report.created_at))
+                    @if let Some(m) = &a.report.message { div.at-message.muted { (m.lines().next().unwrap_or("")) } }
+                    @if a.areas_missing { div.muted.small { "Areas weren't kept for reports this old, so only the totals are shown." } }
+                }
+                nav.at-nav aria-label="Commits" {
+                    @if let Some(h) = &a.older { a.btn.btn-ghost href=(h) rel="prev" { "← Older" } } @else { span.btn.btn-ghost.disabled { "← Older" } }
+                    @if let Some(h) = &a.newer { a.btn.btn-ghost href=(h) rel="next" { "Newer →" } } @else { span.btn.btn-ghost.disabled { "Newer →" } }
+                    a.btn href=(a.latest) { "Latest" }
                 }
             }
         }
@@ -172,24 +191,21 @@ pub fn project(
                     span { span.sw.decomp {} "Decompiled" }
                     span { span.sw.matching {} "Matching" }
                     @if p.data.total > 0 { span { span.sw.data {} "Data" } }
+                    span.muted.small { "Click the chart to see the project at that commit." }
                 }
-                (PreEscaped(svg::history(reports)))
-                p.small { a href={ (version_base(p, active)) "/history" } { "Progress at every commit →" } }
+                (PreEscaped(svg::history(reports, links)))
             }
         }
 
         @if !reports.is_empty() {
             @let cols = ReportColumns::for_reports(reports);
             section.panel {
-                div.panel-head {
-                    h2 { "Recent reports" }
-                    a href={ (version_base(p, active)) "/history" } { "All " (reports.len()) " report" @if reports.len() != 1 { "s" } " →" }
-                }
+                h2 { @if at.is_some() { "Reports up to this one" } @else { "Recent reports" } }
                 table.reports {
                     (cols.head())
                     tbody {
                         @for (i, r) in reports.iter().enumerate().rev().take(15) {
-                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols))
+                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols, links.get(i).map(String::as_str), at.is_some_and(|a| a.report.id == r.id)))
                         }
                     }
                 }
@@ -362,10 +378,55 @@ fn link_host(url: &str) -> &str {
     host.strip_prefix("www.").unwrap_or(host)
 }
 
-/// The project page of a version (`/projects/{slug}` for the default one), which the version's
-/// other pages hang off.
-fn version_base(p: &Project, version: &str) -> String {
-    if version == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, version) }
+/// The report a project page is showing when it's not the latest one.
+pub struct AtCommit {
+    pub report: ReportRow,
+    /// Links to the reports before and after it.
+    pub older: Option<String>,
+    pub newer: Option<String>,
+    /// The page with the latest progress.
+    pub latest: String,
+    /// The report's areas weren't stored (it's from before they were kept per report).
+    pub areas_missing: bool,
+}
+
+/// The key each report is linked with (`/commit/{key}`): its commit hash, or `r{id}` when it
+/// has none or the same commit was reported more than once. `reports` is a version's history.
+pub fn report_keys(reports: &[ReportRow]) -> Vec<String> {
+    let mut seen = std::collections::HashMap::new();
+    for c in reports.iter().filter_map(|r| r.commit.as_deref()) {
+        *seen.entry(c).or_insert(0) += 1;
+    }
+    reports
+        .iter()
+        .map(|r| match r.commit.as_deref() {
+            Some(c) if is_commit_hash(c) && seen.get(c) == Some(&1) => c.to_ascii_lowercase(),
+            _ => format!("r{}", r.id),
+        })
+        .collect()
+}
+
+/// Finds the report a key points to: `r{id}`, or a commit hash (at least 7 characters of it).
+pub fn find_report(reports: &[ReportRow], key: &str) -> Option<usize> {
+    if let Some(id) = key.strip_prefix('r').and_then(|id| id.parse::<i64>().ok()) {
+        return reports.iter().position(|r| r.id == id);
+    }
+    let key = key.to_ascii_lowercase();
+    if key.len() < 7 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    reports.iter().rposition(|r| r.commit.as_deref().is_some_and(|c| c.to_ascii_lowercase().starts_with(&key)))
+}
+
+/// A commit, linked to the repository when it's public.
+fn commit_ref(p: &Project, c: &str) -> Markup {
+    html! {
+        @if is_commit_hash(c) {
+            @if let Some(link) = p.commit_link(c) {
+                a href=(link) rel="noopener" { code { (&c[..7.min(c.len())]) } }
+            } @else { code { (&c[..7.min(c.len())]) } }
+        } @else { code { (c) } }
+    }
 }
 
 /// Which optional columns a list of reports needs.
@@ -404,10 +465,15 @@ fn pct_cell(v: f64, prev: Option<f64>) -> Markup {
     }
 }
 
-fn report_row(p: &Project, r: &ReportRow, prev: Option<&ReportRow>, cols: ReportColumns) -> Markup {
+/// One report; its date links to the project page as of that report.
+fn report_row(p: &Project, r: &ReportRow, prev: Option<&ReportRow>, cols: ReportColumns, link: Option<&str>, current: bool) -> Markup {
     html! {
-        tr {
-            td.when { (time_ago(r.created_at)) }
+        tr.current[current] {
+            td.when {
+                @if let Some(link) = link.filter(|_| !current) {
+                    a href=(link) title="See the project as of this report" { (time_ago(r.created_at)) }
+                } @else { (time_ago(r.created_at)) }
+            }
             @if cols.linked { (pct_cell(r.code.linked_pct(), prev.map(|q| q.code.linked_pct()))) }
             (pct_cell(r.code.decompiled_pct(), prev.map(|q| q.code.decompiled_pct())))
             (pct_cell(r.code.matching_pct(), prev.map(|q| q.code.matching_pct())))
@@ -415,95 +481,40 @@ fn report_row(p: &Project, r: &ReportRow, prev: Option<&ReportRow>, cols: Report
                 @if r.data.total > 0 { (pct_cell(r.data.pct(), prev.filter(|q| q.data.total > 0).map(|q| q.data.pct()))) } @else { td { "—" } }
             }
             td.commit title=[r.message.as_deref()] {
-                @if let Some(c) = &r.commit {
-                    @if is_commit_hash(c) {
-                        @if let Some(link) = p.commit_link(c) {
-                            a href=(link) rel="noopener" { code { (&c[..7.min(c.len())]) } }
-                        } @else { code { (&c[..7.min(c.len())]) } }
-                    } @else { code { (c) } }
-                }
+                @if let Some(c) = &r.commit { (commit_ref(p, c)) }
                 @if let Some(m) = &r.message { " " span.muted { (m.lines().next().unwrap_or("")) } }
             }
         }
     }
 }
 
-/// True if a report moved any of the figures shown in the history.
-fn changed(r: &ReportRow, prev: &ReportRow) -> bool {
-    r.code != prev.code || r.data != prev.data
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub const HISTORY_PAGE_SIZE: usize = 100;
+    fn row(id: i64, commit: Option<&str>) -> ReportRow {
+        ReportRow {
+            id,
+            created_at: id,
+            code: Default::default(),
+            data: Default::default(),
+            functions: Default::default(),
+            has_areas: false,
+            commit: commit.map(str::to_string),
+            message: None,
+        }
+    }
 
-/// `/projects/{slug}/history`: every report of a version, newest first, with what each one changed.
-/// `reports` is oldest first.
-pub fn history_page(p: &Project, reports: &[ReportRow], versions: &[String], active: &str, page: usize, only_changes: bool) -> Markup {
-    let base = version_base(p, active);
-    let cols = ReportColumns::for_reports(reports);
-    let rows: Vec<(usize, &ReportRow)> = reports
-        .iter()
-        .enumerate()
-        .filter(|(i, r)| !only_changes || *i == 0 || changed(r, &reports[i - 1]))
-        .rev()
-        .collect();
-    let pages = rows.len().div_ceil(HISTORY_PAGE_SIZE).max(1);
-    let page = page.clamp(1, pages);
-    let shown = &rows[((page - 1) * HISTORY_PAGE_SIZE).min(rows.len())..(page * HISTORY_PAGE_SIZE).min(rows.len())];
-    let link = |page: usize, changes: bool| {
-        let mut q = Vec::new();
-        if page > 1 { q.push(format!("page={page}")); }
-        if changes { q.push("changes=1".to_string()); }
-        if q.is_empty() { format!("{base}/history") } else { format!("{base}/history?{}", q.join("&")) }
-    };
-    html! {
-        p.crumbs { a href=(base) { "← " (p.name) @if active != p.default_version { " (" (active) ")" } } }
-        h1 { "History" }
-        @if versions.len() > 1 {
-            nav.versions aria-label="Game versions" {
-                span.muted { "Version:" }
-                @for v in versions {
-                    a.vtab.active[v == active] href={ (version_base(p, v)) "/history" } {
-                        @if v.is_empty() { "(unnamed)" } @else { (v) }
-                        @if *v == p.default_version { span.muted { " ★" } }
-                    }
-                }
-            }
-        }
-        @if let (Some(first), Some(last)) = (reports.first(), reports.last()) {
-            section.panel {
-                p {
-                    (fmt_count(reports.len() as u64)) " report" @if reports.len() != 1 { "s" } " since " (time_ago(first.created_at)) "."
-                    @if reports.len() > 1 {
-                        " Since the first one: "
-                        @if cols.linked { (fmt_delta(last.code.linked_pct() - first.code.linked_pct())) " fully linked, " }
-                        (fmt_delta(last.code.decompiled_pct() - first.code.decompiled_pct())) " decompiled, "
-                        (fmt_delta(last.code.matching_pct() - first.code.matching_pct())) " matching"
-                        @if cols.data && first.data.total > 0 { ", " (fmt_delta(last.data.pct() - first.data.pct())) " data" }
-                        "."
-                    }
-                }
-                div.history-filter {
-                    a.vtab.active[!only_changes] href=(link(1, false)) { "Every report" }
-                    a.vtab.active[only_changes] href=(link(1, true)) { "Only reports that changed progress" }
-                }
-                table.reports.history-table {
-                    (cols.head())
-                    tbody {
-                        @for (i, r) in shown {
-                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols))
-                        }
-                    }
-                }
-                @if pages > 1 {
-                    nav.pager aria-label="Pages" {
-                        @if page > 1 { a.btn.btn-ghost href=(link(page - 1, only_changes)) rel="prev" { "← Newer" } }
-                        span.muted { "Page " (page) " of " (pages) }
-                        @if page < pages { a.btn.btn-ghost href=(link(page + 1, only_changes)) rel="next" { "Older →" } }
-                    }
-                }
-            }
-        } @else {
-            div.panel.empty { p.muted { "No reports yet." } }
-        }
+    #[test]
+    fn commit_keys() {
+        let a = "0ad8485c1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b";
+        let b = "da21131c1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b";
+        let reports = [row(1, Some(a)), row(2, None), row(3, Some(b)), row(4, Some(b))];
+        assert_eq!(report_keys(&reports), [a.to_string(), "r2".into(), "r3".into(), "r4".into()]);
+        assert_eq!(find_report(&reports, "0AD8485"), Some(0));
+        assert_eq!(find_report(&reports, "r2"), Some(1));
+        assert_eq!(find_report(&reports, "da21131"), Some(3));
+        assert_eq!(find_report(&reports, "0ad84"), None);
+        assert_eq!(find_report(&reports, "r9"), None);
     }
 }

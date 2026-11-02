@@ -206,6 +206,16 @@ CREATE TABLE project_ports (
     created_at  BIGINT NOT NULL
 );
 CREATE INDEX project_ports_project ON project_ports(project_id, position);
+"#, r#"
+-- Each report keeps its areas and function counts, so a project's page can be shown as it was
+-- at any commit. Reports from before this only have their totals, except each version's latest.
+ALTER TABLE reports ADD COLUMN areas_json TEXT;
+ALTER TABLE reports ADD COLUMN functions_total BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE reports ADD COLUMN functions_matched BIGINT NOT NULL DEFAULT 0;
+UPDATE reports r SET areas_json = v.areas_json, functions_total = v.functions_total, functions_matched = v.functions_matched
+    FROM project_versions v
+    WHERE v.project_id = r.project_id AND v.version = r.version AND v.last_report_at = r.created_at
+      AND v.last_commit IS NOT DISTINCT FROM r.commit_hash;
 "#];
 
 /// Counts are `u64` in Rust and `BIGINT` in the database.
@@ -330,9 +340,14 @@ impl Project {
 
 #[derive(Debug, Clone)]
 pub struct ReportRow {
+    pub id: i64,
     pub created_at: i64,
     pub code: CodeStats,
     pub data: DataStats,
+    /// Zero for reports from before function counts were kept per report.
+    pub functions: FunctionStats,
+    /// Whether the report's areas were stored (see `report_areas`).
+    pub has_areas: bool,
     pub commit: Option<String>,
     pub message: Option<String>,
 }
@@ -802,12 +817,16 @@ pub struct Applied {
 }
 
 fn insert_report_row(c: &mut impl GenericClient, project_id: i64, r: &Report, at: i64) -> anyhow::Result<()> {
+    // Reports without areas (e.g. history imports with totals only) store none.
+    let areas = if r.areas.is_empty() { None } else { Some(serde_json::to_string(&r.areas)?) };
     c.execute(
-        "INSERT INTO reports (project_id, version, created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message, code_linked)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "INSERT INTO reports (project_id, version, created_at, code_total, code_matching, code_nonmatching, data_total, data_done,
+                commit_hash, message, code_linked, areas_json, functions_total, functions_matched)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         &[
             &project_id, &r.version, &at, &big(r.code.total), &big(r.code.matching), &big(r.code.non_matching),
-            &big(r.data.total), &big(r.data.done), &r.commit, &r.message, &big(r.code.linked),
+            &big(r.data.total), &big(r.data.done), &r.commit, &r.message, &big(r.code.linked), &areas,
+            &big(r.functions.total), &big(r.functions.matching),
         ],
     )?;
     Ok(())
@@ -828,8 +847,11 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
         tx.commit()?;
         return Ok(added.then_some(Applied { prev_commit: None, historical: true }));
     }
+    // The same report sent again. A new commit is kept even when nothing moved, so the history
+    // has every commit.
     if let Some(v) = &current {
-        if v.code == r.code && v.data == r.data && v.functions == r.functions && v.areas_json == areas_json && v.unit == r.unit && v.layout == r.layout {
+        let unchanged = v.code == r.code && v.data == r.data && v.functions == r.functions && v.areas_json == areas_json && v.unit == r.unit && v.layout == r.layout;
+        if unchanged && (r.commit.is_none() || r.commit == v.last_commit) {
             return Ok(None);
         }
     }
@@ -837,8 +859,9 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
     // code): it replaces itself, keeping what it's compared with and its commit list.
     let same = current.as_ref().is_some_and(|v| v.last_report_at == Some(t) && v.last_commit == r.commit);
     let prev_commit = if same { None } else { current.as_ref().and_then(|v| v.last_commit.clone()) };
+    // A commit that didn't move the figures keeps the last change on show.
     let prev = match &current {
-        Some(v) if same => (v.prev_code, v.prev_data),
+        Some(v) if same || (v.code == r.code && v.data == r.data) => (v.prev_code, v.prev_data),
         Some(v) => (v.code, v.data),
         None => Default::default(),
     };
@@ -870,11 +893,12 @@ pub fn apply_report(c: &mut Conn, project: &Project, r: &Report, at: Option<i64>
     let replaced = if same {
         tx.execute(
             "UPDATE reports SET code_total = $4, code_matching = $5, code_nonmatching = $6, data_total = $7, data_done = $8,
-                    code_linked = $9, message = COALESCE($10, message)
+                    code_linked = $9, message = COALESCE($10, message), areas_json = $12, functions_total = $13, functions_matched = $14
              WHERE project_id = $1 AND version = $2 AND created_at = $3 AND commit_hash IS NOT DISTINCT FROM $11",
             &[
                 &project.id, &r.version, &t, &big(r.code.total), &big(r.code.matching), &big(r.code.non_matching),
                 &big(r.data.total), &big(r.data.done), &big(r.code.linked), &r.message, &r.commit,
+                &(!r.areas.is_empty()).then_some(&areas_json), &big(r.functions.total), &big(r.functions.matching),
             ],
         )?
     } else {
@@ -923,17 +947,21 @@ fn insert_history(c: &mut impl GenericClient, project_id: i64, r: &Report, at: i
 
 pub fn reports_for_project(c: &mut Conn, project_id: i64, version: &str, limit: usize) -> anyhow::Result<Vec<ReportRow>> {
     let rows = c.query(
-        "SELECT created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message, code_linked
-         FROM reports WHERE project_id = $1 AND version = $2 ORDER BY created_at DESC LIMIT $3",
+        "SELECT created_at, code_total, code_matching, code_nonmatching, data_total, data_done, commit_hash, message, code_linked,
+                id, functions_total, functions_matched, areas_json IS NOT NULL
+         FROM reports WHERE project_id = $1 AND version = $2 ORDER BY created_at DESC, id DESC LIMIT $3",
         &[&project_id, &version, &(limit as i64)],
     )?;
     let mut out = rows
         .iter()
         .map(|r| {
             Ok(ReportRow {
+                id: r.try_get(9)?,
                 created_at: r.try_get(0)?,
                 code: CodeStats { total: unsigned(r, 1)?, matching: unsigned(r, 2)?, non_matching: unsigned(r, 3)?, linked: unsigned(r, 8)? },
                 data: DataStats { total: unsigned(r, 4)?, done: unsigned(r, 5)? },
+                functions: FunctionStats { total: unsigned(r, 10)?, matching: unsigned(r, 11)? },
+                has_areas: r.try_get(12)?,
                 commit: r.try_get(6)?,
                 message: r.try_get(7)?,
             })
@@ -941,6 +969,14 @@ pub fn reports_for_project(c: &mut Conn, project_id: i64, version: &str, limit: 
         .collect::<Result<Vec<_>, postgres::Error>>()?;
     out.reverse();
     Ok(out)
+}
+
+/// The areas stored with one report of a project, if it has any.
+pub fn report_areas(c: &mut Conn, project_id: i64, report_id: i64) -> anyhow::Result<Option<String>> {
+    Ok(c.query_opt("SELECT areas_json FROM reports WHERE id = $1 AND project_id = $2", &[&report_id, &project_id])?
+        .map(|r| r.try_get(0))
+        .transpose()?
+        .flatten())
 }
 
 /// Stores the commits fetched for a version's report, unless a newer report has arrived
@@ -1169,10 +1205,14 @@ const FEED_SQL: &str = "SELECT r.id, r.created_at, r.version, r.code_total, r.co
     JOIN projects p ON p.id = r.project_id
     JOIN users u ON u.id = p.owner_id
     LEFT JOIN LATERAL (
-        SELECT q.code_total, q.code_matching, q.code_nonmatching FROM reports q
-        WHERE q.project_id = r.project_id AND q.version = r.version AND q.created_at < r.created_at
-        ORDER BY q.created_at DESC LIMIT 1
+        SELECT q.code_total, q.code_matching, q.code_nonmatching, q.code_linked, q.data_total, q.data_done FROM reports q
+        WHERE q.project_id = r.project_id AND q.version = r.version AND (q.created_at, q.id) < (r.created_at, r.id)
+        ORDER BY q.created_at DESC, q.id DESC LIMIT 1
     ) prev ON TRUE";
+
+/// Feed entries are reports that moved the figures (commits without progress are only history).
+const FEED_CHANGED: &str = "(prev.code_total IS NULL OR (r.code_total, r.code_matching, r.code_nonmatching, r.code_linked, r.data_total, r.data_done)
+    IS DISTINCT FROM (prev.code_total, prev.code_matching, prev.code_nonmatching, prev.code_linked, prev.data_total, prev.data_done))";
 
 fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
     let prev_total: Option<i64> = r.try_get(13)?;
@@ -1206,7 +1246,7 @@ fn feed_item_from_row(r: &Row) -> Result<FeedItem, postgres::Error> {
 pub fn recent_feed_items(c: &mut Conn, hide_threshold: i64, limit: usize) -> anyhow::Result<Vec<FeedItem>> {
     let sql = format!(
         "{FEED_SQL}
-         WHERE NOT p.hidden AND NOT u.is_banned AND p.image IS NOT NULL AND p.upvotes - p.downvotes > $1
+         WHERE NOT p.hidden AND NOT u.is_banned AND p.image IS NOT NULL AND p.upvotes - p.downvotes > $1 AND {FEED_CHANGED}
          ORDER BY r.created_at DESC, r.id DESC LIMIT $2"
     );
     Ok(c.query(&sql, &[&hide_threshold, &(limit as i64)])?.iter().map(feed_item_from_row).collect::<Result<_, _>>()?)
@@ -1214,7 +1254,7 @@ pub fn recent_feed_items(c: &mut Conn, hide_threshold: i64, limit: usize) -> any
 
 /// Latest reports of one project, every version.
 pub fn project_feed_items(c: &mut Conn, project_id: i64, limit: usize) -> anyhow::Result<Vec<FeedItem>> {
-    let sql = format!("{FEED_SQL} WHERE r.project_id = $1 ORDER BY r.created_at DESC, r.id DESC LIMIT $2");
+    let sql = format!("{FEED_SQL} WHERE r.project_id = $1 AND {FEED_CHANGED} ORDER BY r.created_at DESC, r.id DESC LIMIT $2");
     Ok(c.query(&sql, &[&project_id, &(limit as i64)])?.iter().map(feed_item_from_row).collect::<Result<_, _>>()?)
 }
 

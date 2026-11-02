@@ -106,7 +106,7 @@ section { margin-bottom: 36px; }
 /* legend & bars */
 .legend { list-style: none; display: flex; flex-wrap: wrap; gap: 14px; padding: 0; margin: 10px 0 16px; font-size: .85rem; color: var(--muted); }
 .legend li, .history-legend > span { display: inline-flex; align-items: center; gap: 6px; }
-.history-legend { display: flex; gap: 14px; font-size: .85rem; color: var(--muted); margin-bottom: 8px; }
+.history-legend { display: flex; gap: 14px; font-size: .85rem; color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
 .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; background: var(--none); vertical-align: -1px; margin-right: 4px; }
 .sw.matching { background: var(--matching); }
 .sw.nonmatching { background: var(--nonmatching); }
@@ -371,9 +371,11 @@ section > .search { margin: 0 0 12px; }
 .port-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .port-group-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .port-group-head h2 { margin: 0; }
-.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.panel-head h2 { margin-bottom: 0; }
-.crumbs { margin: 0 0 4px; font-size: .9rem; }
-.history-filter { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
 .reports td.pct, .reports td.when { white-space: nowrap; }
-.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
+.at-commit { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap;
+  margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--accent); border-radius: 10px; background: var(--panel); }
+.at-message { margin-top: 2px; }
+.at-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.disabled { opacity: .45; pointer-events: none; }
+.reports tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.history-wrap.linked svg { cursor: pointer; }

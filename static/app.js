@@ -143,14 +143,19 @@
       var plotW = chart.w - chart.l - chart.r, span = Math.max(chart.t1 - chart.t0, 1);
       var fmt = function (v) { return v.toFixed(2) + "%"; };
 
-      function show(ev) {
+      // The report under the pointer. The chart is a step line: the value holds until the next report.
+      function pointAt(ev) {
         var rect = svg.getBoundingClientRect();
         var x = (ev.clientX - rect.left) * chart.w / rect.width;
         x = Math.min(Math.max(x, chart.l), chart.w - chart.r);
         var t = chart.t0 + (x - chart.l) / plotW * span;
-        // The chart is a step line: the value holds until the next report.
         var p = pts[0];
         for (var i = 0; i < pts.length && pts[i][0] <= t; i++) p = pts[i];
+        return { p: p, x: x, rect: rect };
+      }
+
+      function show(ev) {
+        var at = pointAt(ev), p = at.p, x = at.x, rect = at.rect;
         line.setAttribute("x1", x);
         line.setAttribute("x2", x);
         line.setAttribute("visibility", "visible");
@@ -173,6 +178,16 @@
       svg.addEventListener("pointermove", show);
       svg.addEventListener("pointerdown", show);
       svg.addEventListener("pointerleave", hide);
+      // Clicking opens the project page as of that report. On touch screens the first tap
+      // shows the values and a second tap on the same report opens it.
+      var tapped = null, lastType = "mouse";
+      svg.addEventListener("pointerdown", function (ev) { lastType = ev.pointerType; });
+      svg.addEventListener("click", function (ev) {
+        var p = pointAt(ev).p;
+        if (!p[6]) return;
+        if (lastType === "touch" && tapped !== p) { tapped = p; return; }
+        window.location.href = p[6];
+      });
     });
   }
 
