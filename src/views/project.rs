@@ -92,23 +92,6 @@ pub fn project(
             }
         }
 
-        @if let Some(a) = at {
-            section.at-commit {
-                div.at-what {
-                    @if a.past { "Progress as of " } @else { "Latest report: " }
-                    @if let Some(c) = &a.report.commit { (commit_ref(p, c)) " · " }
-                    (time_ago(a.report.created_at))
-                    @if let Some(m) = &a.report.message { div.at-message.muted { (m.lines().next().unwrap_or("")) } }
-                    @if a.areas_missing { div.muted.small { "Areas weren't kept for reports this old, so only the totals are shown." } }
-                }
-                nav.at-nav aria-label="Commits" {
-                    @if let Some(h) = &a.older { a.btn.btn-ghost href=(h) rel="prev" { "← Older" } } @else { span.btn.btn-ghost.disabled { "← Older" } }
-                    @if let Some(h) = &a.newer { a.btn.btn-ghost href=(h) rel="next" { "Newer →" } } @else { span.btn.btn-ghost.disabled { "Newer →" } }
-                    @if let Some(h) = &a.latest { a.btn href=(h) { "Latest" } } @else { span.btn.disabled { "Latest" } }
-                }
-            }
-        }
-
         section.panel {
             div.stat-cards {
                 div.stat-card {
@@ -159,6 +142,16 @@ pub fn project(
                 }
             }
             (last_change(p))
+            @if let Some(a) = at {
+                div.at-commit {
+                    nav.at-nav aria-label="Commits" {
+                        @if let Some(h) = &a.older { a.btn.btn-ghost href=(h) rel="prev" { "← Older" } } @else { span.btn.btn-ghost.disabled { "← Older" } }
+                        @if let Some(h) = &a.newer { a.btn.btn-ghost href=(h) rel="next" { "Newer →" } } @else { span.btn.btn-ghost.disabled { "Newer →" } }
+                        @if let Some(h) = &a.latest { a.btn href=(h) { "Latest" } } @else { span.btn.disabled { "Latest" } }
+                    }
+                    @if a.areas_missing { span.muted.small { "No areas were stored for this report, so only the totals are shown." } }
+                }
+            }
             (recent_commits(p))
         }
 
@@ -408,7 +401,7 @@ pub struct AtCommit {
     pub here: String,
     /// Showing an earlier report rather than the latest.
     pub past: bool,
-    /// The report's areas weren't stored (it's from before they were kept per report).
+    /// The report has no stored areas (sent without them, or from before they were kept).
     pub areas_missing: bool,
 }
 

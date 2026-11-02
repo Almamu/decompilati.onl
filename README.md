@@ -41,6 +41,10 @@ non-HttpOnly `li=1` hint cookie is present, so anonymous visitors never reach th
    edge fetches the new version right away. Re-warming reaches the Cloudflare data center closest to
    the VPS; other data centers fetch on their next request, and those fetches are served from the
    memory cache.
+   Views of a project page that can't be listed for a purge (a past commit, `/commit/{sha}`, and
+   later pages of the report list, `?page=N`) skip the edge: they're sent with
+   `Cache-Control: public, no-cache`, kept in the memory cache, and dropped from it along with
+   their project page, so a revalidation is always answered with the current version.
 3. **Assets** are compiled into the binary and served at content-hashed URLs with `immutable`.
    Cover images are re-encoded to 640×360 JPEG and stored under content-hash names, so they're
    immutable too.

@@ -178,7 +178,8 @@ pub async fn project(State(state): State<AppState>, headers: HeaderMap, Path(slu
     let key = format!("/projects/{slug}");
     let page = q.page();
     if page > 1 {
-        return uncached(&state, &headers, render_project(&state, slug, None, None, page).await?);
+        let key = format!("{key}?page={page}");
+        return cached_view(&state, &headers, key, || render_project(&state, slug, None, None, page)).await;
     }
     cached(&state, &headers, key, || render_project(&state, slug, None, None, 1)).await
 }
@@ -197,7 +198,8 @@ pub async fn project_version(
     };
     let page = q.page();
     if page > 1 {
-        return uncached(&state, &headers, render_project(&state, slug, Some(version), None, page).await?);
+        let key = format!("{key}?page={page}");
+        return cached_view(&state, &headers, key, || render_project(&state, slug, Some(version), None, page)).await;
     }
     cached(&state, &headers, key, || render_project(&state, slug, Some(version), None, 1)).await
 }
@@ -335,20 +337,33 @@ pub async fn project_version_commit(
     commit_response(&state, &headers, slug, Some(version), key, q.page()).await
 }
 
-/// Past commits aren't kept in the page cache: there are too many, and the links to newer
-/// commits change as reports arrive.
 async fn commit_response(state: &AppState, headers: &HeaderMap, slug: String, version: Option<String>, key: String, page: usize) -> AppResult<Response> {
     if key.len() > 64 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Err(AppError::NotFound);
     }
-    uncached(state, headers, render_project(state, slug, version, Some(key), page).await?)
+    let base = match &version {
+        Some(v) => crate::util::version_page(&slug, v),
+        None => format!("/projects/{slug}"),
+    };
+    let cache_key = if page > 1 { format!("{base}/commit/{key}?page={page}") } else { format!("{base}/commit/{key}") };
+    cached_view(state, headers, cache_key, || render_project(state, slug, version, Some(key), page)).await
 }
 
 /// Responds with a page left out of the page cache, which browsers and the edge keep briefly.
-fn uncached(state: &AppState, headers: &HeaderMap, page: Arc<CachedPage>) -> AppResult<Response> {
-    let mut res = state.cache.respond(&page, headers);
-    res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=300"));
-    Ok(res)
+/// Like `cached`, for views of a project page that can't be purged from the edge by URL (past
+/// commits, later pages of the report list). They're cached in memory only and dropped with
+/// their project page (see `PageCache::views`); browsers and the edge revalidate them every time.
+async fn cached_view<F, Fut>(state: &AppState, headers: &HeaderMap, key: String, render: F) -> AppResult<Response>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = AppResult<Arc<CachedPage>>>,
+{
+    if let Some(page) = state.cache.get_view(&key) {
+        return Ok(state.cache.respond_view(&page, headers));
+    }
+    let page = render().await?;
+    state.cache.put_view(key, page.clone());
+    Ok(state.cache.respond_view(&page, headers))
 }
 
 /// The old `/history` list: the project page now shows any commit itself.

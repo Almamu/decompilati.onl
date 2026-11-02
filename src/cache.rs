@@ -42,6 +42,10 @@ struct Purge {
 
 pub struct PageCache {
     pages: RwLock<HashMap<String, Arc<CachedPage>>>,
+    /// Views of a project page that can't be listed for a purge (past commits, later pages of
+    /// the report list): kept only here, dropped with the page they belong to, and never
+    /// cached by the edge. With the total size of their bodies.
+    views: RwLock<(HashMap<String, Arc<CachedPage>>, usize)>,
     purge_tx: mpsc::UnboundedSender<Purge>,
     /// Edge TTL. Long when we can purge Cloudflare, short otherwise.
     edge_ttl: u64,
@@ -52,6 +56,7 @@ impl PageCache {
         let (tx, rx) = mpsc::unbounded_channel();
         let cache = Arc::new(PageCache {
             pages: RwLock::new(HashMap::new()),
+            views: RwLock::new((HashMap::new(), 0)),
             purge_tx: tx,
             edge_ttl: if config.cloudflare.is_some() { 30 * 86400 } else { 60 },
         });
@@ -70,6 +75,22 @@ impl PageCache {
             pages.clear();
         }
         pages.insert(key, page);
+    }
+
+    pub fn get_view(&self, key: &str) -> Option<Arc<CachedPage>> {
+        self.views.read().0.get(key).cloned()
+    }
+
+    pub fn put_view(&self, key: String, page: Arc<CachedPage>) {
+        const MAX_BYTES: usize = 256 * 1024 * 1024;
+        let mut views = self.views.write();
+        if views.1 + page.body.len() > MAX_BYTES {
+            *views = (HashMap::new(), 0);
+        }
+        views.1 += page.body.len();
+        if let Some(old) = views.0.insert(key, page) {
+            views.1 -= old.body.len();
+        }
     }
 
     /// Drops the given paths from the local cache and queues them for an edge purge, which
@@ -107,6 +128,17 @@ impl PageCache {
         for p in &paths {
             pages.remove(p);
         }
+        drop(pages);
+        // A project page takes its views along: `{page}?page=N` and `{page}/commit/{key}…`.
+        let mut views = self.views.write();
+        let (map, bytes) = &mut *views;
+        map.retain(|key, page| {
+            let stale = paths.iter().any(|p| key.strip_prefix(p.as_str()).is_some_and(|rest| rest.starts_with('?') || rest.starts_with("/commit/")));
+            if stale {
+                *bytes -= page.body.len();
+            }
+            !stale
+        });
         paths
     }
 
@@ -117,6 +149,16 @@ impl PageCache {
             "public, max-age=0, must-revalidate, s-maxage={}, stale-if-error=86400",
             self.edge_ttl
         );
+        Self::respond_with(page, req_headers, &cache_control)
+    }
+
+    /// Builds the response for a view (see `views`): browsers and the edge revalidate it every
+    /// time, getting a 304 while it's unchanged.
+    pub fn respond_view(&self, page: &CachedPage, req_headers: &HeaderMap) -> Response {
+        Self::respond_with(page, req_headers, "public, no-cache")
+    }
+
+    fn respond_with(page: &CachedPage, req_headers: &HeaderMap, cache_control: &str) -> Response {
         let not_modified = req_headers
             .get(header::IF_NONE_MATCH)
             .and_then(|v| v.to_str().ok())
@@ -131,7 +173,7 @@ impl PageCache {
                 .into_response()
         };
         let h = res.headers_mut();
-        h.insert(header::CACHE_CONTROL, HeaderValue::from_str(&cache_control).unwrap());
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_str(cache_control).unwrap());
         h.insert(header::ETAG, HeaderValue::from_str(&page.etag).unwrap());
         h.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
         res
