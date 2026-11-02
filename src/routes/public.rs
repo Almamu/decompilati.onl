@@ -4,7 +4,7 @@
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -299,6 +299,75 @@ pub async fn project_version_report(
         _ => return Err(AppError::NotFound),
     };
     cached(&state, &headers, key, || render_report(&state, slug, Some(version))).await
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct HistoryQuery {
+    page: Option<usize>,
+    changes: Option<String>,
+}
+
+/// `GET /projects/{slug}/history`: every report of the default version.
+pub async fn project_history_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Query(q): Query<HistoryQuery>,
+) -> AppResult<Response> {
+    let key = format!("/projects/{slug}/history");
+    history_response(&state, &headers, key, slug, None, q).await
+}
+
+/// `GET /projects/{slug}/versions/{version}/history`
+pub async fn project_version_history_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, version)): Path<(String, String)>,
+    Query(q): Query<HistoryQuery>,
+) -> AppResult<Response> {
+    let key = format!("{}/history", crate::util::version_page(&slug, &version));
+    let version = match version.as_str() {
+        "~" => String::new(),
+        v if crate::report::valid_version(v) && !v.is_empty() => version,
+        _ => return Err(AppError::NotFound),
+    };
+    history_response(&state, &headers, key, slug, Some(version), q).await
+}
+
+/// The first page is cached (and purged with the project); other pages and the filtered view
+/// are rendered on demand, since a new report shifts every page.
+async fn history_response(state: &AppState, headers: &HeaderMap, key: String, slug: String, version: Option<String>, q: HistoryQuery) -> AppResult<Response> {
+    let page = q.page.unwrap_or(1).max(1);
+    let only_changes = q.changes.as_deref().is_some_and(|v| v == "1" || v == "true");
+    let render = || async {
+        let (shown, active) = export_version(state, slug, version).await?;
+        let pid = shown.id;
+        let v = active.clone();
+        let (reports, versions) = state
+            .db
+            .run(move |c| Ok((db::reports_for_project(c, pid, &v, 1_000_000)?, db::versions_for_project(c, pid)?)))
+            .await?;
+        let names: Vec<String> = versions.iter().map(|v| v.version.clone()).collect();
+        let name = if active != shown.default_version { format!("{} ({active})", shown.name) } else { shown.name.clone() };
+        let html = views::layout::render(Page {
+            title: &format!("{name} history"),
+            description: &format!("Progress of {name} at every reported commit."),
+            image: og_image(state, &shown),
+            body: views::project::history_page(&shown, &reports, &names, &active, page, only_changes),
+            canonical: (page == 1 && !only_changes).then(|| key.clone()),
+            og_type: None,
+            feed: Some(format!("/projects/{}/feed.xml", shown.slug)),
+            json_ld: None,
+        });
+        Ok(CachedPage::new(html, HTML))
+    };
+    if page == 1 && !only_changes {
+        return cached(state, headers, key.clone(), render).await;
+    }
+    let page = render().await?;
+    let mut res = state.cache.respond(&page, headers);
+    res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=300"));
+    Ok(res)
 }
 
 /// `GET /projects/{slug}/history.json`: the default version's history in decomp.dev's format.

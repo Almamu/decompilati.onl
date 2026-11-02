@@ -174,38 +174,22 @@ pub fn project(
                     @if p.data.total > 0 { span { span.sw.data {} "Data" } }
                 }
                 (PreEscaped(svg::history(reports)))
+                p.small { a href={ (version_base(p, active)) "/history" } { "Progress at every commit →" } }
             }
         }
 
         @if !reports.is_empty() {
+            @let cols = ReportColumns::for_reports(reports);
             section.panel {
-                h2 { "Recent reports" }
+                div.panel-head {
+                    h2 { "Recent reports" }
+                    a href={ (version_base(p, active)) "/history" } { "All " (reports.len()) " report" @if reports.len() != 1 { "s" } " →" }
+                }
                 table.reports {
-                    thead { tr { th { "When" } th { "Code" } th { "Matching" } th { "Data" } th { "Commit" } } }
+                    (cols.head())
                     tbody {
                         @for (i, r) in reports.iter().enumerate().rev().take(15) {
-                            @let prev = if i > 0 { reports.get(i - 1) } else { None };
-                            tr {
-                                td { (time_ago(r.created_at)) }
-                                td {
-                                    (fmt_pct(r.code.decompiled_pct()))
-                                    @if let Some(prev) = prev {
-                                        " " span.delta.small { (fmt_delta(r.code.decompiled_pct() - prev.code.decompiled_pct())) }
-                                    }
-                                }
-                                td { (fmt_pct(r.code.matching_pct())) }
-                                td { @if r.data.total > 0 { (fmt_pct(r.data.pct())) } @else { "—" } }
-                                td.commit {
-                                    @if let Some(c) = &r.commit {
-                                        @if is_commit_hash(c) {
-                                            @if let Some(link) = p.commit_link(c) {
-                                                a href=(link) rel="noopener" { code { (&c[..7.min(c.len())]) } }
-                                            } @else { code { (&c[..7.min(c.len())]) } }
-                                        } @else { code { (c) } }
-                                    }
-                                    @if let Some(m) = &r.message { " " span.muted { (m) } }
-                                }
-                            }
+                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols))
                         }
                     }
                 }
@@ -376,4 +360,150 @@ fn link_host(url: &str) -> &str {
     let rest = url.strip_prefix("https://").unwrap_or(url);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// The project page of a version (`/projects/{slug}` for the default one), which the version's
+/// other pages hang off.
+fn version_base(p: &Project, version: &str) -> String {
+    if version == p.default_version { format!("/projects/{}", p.slug) } else { crate::util::version_page(&p.slug, version) }
+}
+
+/// Which optional columns a list of reports needs.
+#[derive(Clone, Copy)]
+struct ReportColumns {
+    linked: bool,
+    data: bool,
+}
+
+impl ReportColumns {
+    fn for_reports(reports: &[ReportRow]) -> Self {
+        ReportColumns { linked: reports.iter().any(|r| r.code.linked > 0), data: reports.iter().any(|r| r.data.total > 0) }
+    }
+    fn head(self) -> Markup {
+        html! {
+            thead { tr {
+                th { "When" }
+                @if self.linked { th { "Fully linked" } }
+                th { "Decompiled" }
+                th { "Matching" }
+                @if self.data { th { "Data" } }
+                th { "Commit" }
+            } }
+        }
+    }
+}
+
+/// A percentage with its change since the previous report.
+fn pct_cell(v: f64, prev: Option<f64>) -> Markup {
+    let d = prev.map(|p| v - p).filter(|d| d.abs() >= 0.005);
+    html! {
+        td.pct {
+            (fmt_pct(v))
+            @if let Some(d) = d { " " span.delta.small.up[d > 0.0].down[d < 0.0] { (fmt_delta(d)) } }
+        }
+    }
+}
+
+fn report_row(p: &Project, r: &ReportRow, prev: Option<&ReportRow>, cols: ReportColumns) -> Markup {
+    html! {
+        tr {
+            td.when { (time_ago(r.created_at)) }
+            @if cols.linked { (pct_cell(r.code.linked_pct(), prev.map(|q| q.code.linked_pct()))) }
+            (pct_cell(r.code.decompiled_pct(), prev.map(|q| q.code.decompiled_pct())))
+            (pct_cell(r.code.matching_pct(), prev.map(|q| q.code.matching_pct())))
+            @if cols.data {
+                @if r.data.total > 0 { (pct_cell(r.data.pct(), prev.filter(|q| q.data.total > 0).map(|q| q.data.pct()))) } @else { td { "—" } }
+            }
+            td.commit title=[r.message.as_deref()] {
+                @if let Some(c) = &r.commit {
+                    @if is_commit_hash(c) {
+                        @if let Some(link) = p.commit_link(c) {
+                            a href=(link) rel="noopener" { code { (&c[..7.min(c.len())]) } }
+                        } @else { code { (&c[..7.min(c.len())]) } }
+                    } @else { code { (c) } }
+                }
+                @if let Some(m) = &r.message { " " span.muted { (m.lines().next().unwrap_or("")) } }
+            }
+        }
+    }
+}
+
+/// True if a report moved any of the figures shown in the history.
+fn changed(r: &ReportRow, prev: &ReportRow) -> bool {
+    r.code != prev.code || r.data != prev.data
+}
+
+pub const HISTORY_PAGE_SIZE: usize = 100;
+
+/// `/projects/{slug}/history`: every report of a version, newest first, with what each one changed.
+/// `reports` is oldest first.
+pub fn history_page(p: &Project, reports: &[ReportRow], versions: &[String], active: &str, page: usize, only_changes: bool) -> Markup {
+    let base = version_base(p, active);
+    let cols = ReportColumns::for_reports(reports);
+    let rows: Vec<(usize, &ReportRow)> = reports
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| !only_changes || *i == 0 || changed(r, &reports[i - 1]))
+        .rev()
+        .collect();
+    let pages = rows.len().div_ceil(HISTORY_PAGE_SIZE).max(1);
+    let page = page.clamp(1, pages);
+    let shown = &rows[((page - 1) * HISTORY_PAGE_SIZE).min(rows.len())..(page * HISTORY_PAGE_SIZE).min(rows.len())];
+    let link = |page: usize, changes: bool| {
+        let mut q = Vec::new();
+        if page > 1 { q.push(format!("page={page}")); }
+        if changes { q.push("changes=1".to_string()); }
+        if q.is_empty() { format!("{base}/history") } else { format!("{base}/history?{}", q.join("&")) }
+    };
+    html! {
+        p.crumbs { a href=(base) { "← " (p.name) @if active != p.default_version { " (" (active) ")" } } }
+        h1 { "History" }
+        @if versions.len() > 1 {
+            nav.versions aria-label="Game versions" {
+                span.muted { "Version:" }
+                @for v in versions {
+                    a.vtab.active[v == active] href={ (version_base(p, v)) "/history" } {
+                        @if v.is_empty() { "(unnamed)" } @else { (v) }
+                        @if *v == p.default_version { span.muted { " ★" } }
+                    }
+                }
+            }
+        }
+        @if let (Some(first), Some(last)) = (reports.first(), reports.last()) {
+            section.panel {
+                p {
+                    (fmt_count(reports.len() as u64)) " report" @if reports.len() != 1 { "s" } " since " (time_ago(first.created_at)) "."
+                    @if reports.len() > 1 {
+                        " Since the first one: "
+                        @if cols.linked { (fmt_delta(last.code.linked_pct() - first.code.linked_pct())) " fully linked, " }
+                        (fmt_delta(last.code.decompiled_pct() - first.code.decompiled_pct())) " decompiled, "
+                        (fmt_delta(last.code.matching_pct() - first.code.matching_pct())) " matching"
+                        @if cols.data && first.data.total > 0 { ", " (fmt_delta(last.data.pct() - first.data.pct())) " data" }
+                        "."
+                    }
+                }
+                div.history-filter {
+                    a.vtab.active[!only_changes] href=(link(1, false)) { "Every report" }
+                    a.vtab.active[only_changes] href=(link(1, true)) { "Only reports that changed progress" }
+                }
+                table.reports.history-table {
+                    (cols.head())
+                    tbody {
+                        @for (i, r) in shown {
+                            (report_row(p, r, i.checked_sub(1).map(|j| &reports[j]), cols))
+                        }
+                    }
+                }
+                @if pages > 1 {
+                    nav.pager aria-label="Pages" {
+                        @if page > 1 { a.btn.btn-ghost href=(link(page - 1, only_changes)) rel="prev" { "← Newer" } }
+                        span.muted { "Page " (page) " of " (pages) }
+                        @if page < pages { a.btn.btn-ghost href=(link(page + 1, only_changes)) rel="next" { "Older →" } }
+                    }
+                }
+            }
+        } @else {
+            div.panel.empty { p.muted { "No reports yet." } }
+        }
+    }
 }

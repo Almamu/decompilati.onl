@@ -371,3 +371,9 @@ section > .search { margin: 0 0 12px; }
 .port-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .port-group-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .port-group-head h2 { margin: 0; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.panel-head h2 { margin-bottom: 0; }
+.crumbs { margin: 0 0 4px; font-size: .9rem; }
+.history-filter { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
+.reports td.pct, .reports td.when { white-space: nowrap; }
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
