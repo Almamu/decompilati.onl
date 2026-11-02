@@ -42,9 +42,9 @@ non-HttpOnly `li=1` hint cookie is present, so anonymous visitors never reach th
    the VPS; other data centers fetch on their next request, and those fetches are served from the
    memory cache.
    Views of a project page that can't be listed for a purge (a past commit, `/commit/{sha}`, and
-   later pages of the report list, `?page=N`) skip the edge: they're sent with
-   `Cache-Control: public, no-cache`, kept in the memory cache, and dropped from it along with
-   their project page, so a revalidation is always answered with the current version.
+   later pages of the report list, `?page=N`) carry `Cache-Tag: project-{slug}`. Whenever a
+   project's page is purged, its tag is purged too (purge-by-tag also works on the free plan), and
+   the views are dropped from the memory cache along with the page.
 3. **Assets** are compiled into the binary and served at content-hashed URLs with `immutable`.
    Cover images are re-encoded to 640×360 JPEG and stored under content-hash names, so they're
    immutable too.

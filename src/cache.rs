@@ -43,8 +43,8 @@ struct Purge {
 pub struct PageCache {
     pages: RwLock<HashMap<String, Arc<CachedPage>>>,
     /// Views of a project page that can't be listed for a purge (past commits, later pages of
-    /// the report list): kept only here, dropped with the page they belong to, and never
-    /// cached by the edge. With the total size of their bodies.
+    /// the report list), dropped with the page they belong to, with the total size of their
+    /// bodies. The edge purges them by the project's cache tag.
     views: RwLock<(HashMap<String, Arc<CachedPage>>, usize)>,
     purge_tx: mpsc::UnboundedSender<Purge>,
     /// Edge TTL. Long when we can purge Cloudflare, short otherwise.
@@ -152,10 +152,14 @@ impl PageCache {
         Self::respond_with(page, req_headers, &cache_control)
     }
 
-    /// Builds the response for a view (see `views`): browsers and the edge revalidate it every
-    /// time, getting a 304 while it's unchanged.
-    pub fn respond_view(&self, page: &CachedPage, req_headers: &HeaderMap) -> Response {
-        Self::respond_with(page, req_headers, "public, no-cache")
+    /// Builds the response for a view of a project page (see `views`). The edge caches it like any
+    /// page, tagged with the project (`project_tag`) so it's purged by tag along with that page.
+    pub fn respond_view(&self, page: &CachedPage, req_headers: &HeaderMap, slug: &str) -> Response {
+        let mut res = self.respond(page, req_headers);
+        if let Ok(tag) = HeaderValue::from_str(&project_tag(slug)) {
+            res.headers_mut().insert("cache-tag", tag);
+        }
+        res
     }
 
     fn respond_with(page: &CachedPage, req_headers: &HeaderMap, cache_control: &str) -> Response {
@@ -178,6 +182,17 @@ impl PageCache {
         h.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
         res
     }
+}
+
+/// Cloudflare cache tag on a project's views (`PageCache::views`). Purging the project's page
+/// (`/projects/{slug}`) also purges this tag.
+pub fn project_tag(slug: &str) -> String {
+    format!("project-{slug}")
+}
+
+/// The project whose page a path is: `/projects/{slug}` and nothing after it.
+fn project_of(path: &str) -> Option<&str> {
+    path.strip_prefix("/projects/").filter(|s| !s.is_empty() && !s.contains(['/', '?']))
 }
 
 /// Paths whose content depends on a project. Listing pages change whenever any project does.
@@ -235,13 +250,19 @@ async fn purge_worker(config: Config, mut rx: mpsc::UnboundedReceiver<Purge>) {
             continue;
         };
         let urls: Vec<String> = paths.iter().map(|p| format!("{}{}", config.base_url, p)).collect();
+        // A project's page takes its views (past commits, report pages) along, by tag.
+        let tags: Vec<String> = paths.iter().filter_map(|p| project_of(p)).map(project_tag).collect();
+        // Free plans accept up to 30 URLs or tags per purge request.
+        let bodies = urls
+            .chunks(30)
+            .map(|c| serde_json::json!({ "files": c }))
+            .chain(tags.chunks(30).map(|c| serde_json::json!({ "tags": c })));
         let mut purged_ok = true;
-        // Free plans accept up to 30 URLs per purge request.
-        for chunk in urls.chunks(30) {
+        for body in bodies {
             let res = client
                 .post(format!("https://api.cloudflare.com/client/v4/zones/{}/purge_cache", cf.zone_id))
                 .bearer_auth(&cf.api_token)
-                .json(&serde_json::json!({ "files": chunk }))
+                .json(&body)
                 .send()
                 .await;
             match res {
@@ -258,7 +279,7 @@ async fn purge_worker(config: Config, mut rx: mpsc::UnboundedReceiver<Purge>) {
                 }
             }
         }
-        tracing::info!(count = urls.len(), ok = purged_ok, "purged cloudflare cache");
+        tracing::info!(count = urls.len(), tags = tags.len(), ok = purged_ok, "purged cloudflare cache");
         // Done (or failed): release whoever is waiting.
         drop(waiters);
         if !purged_ok {
@@ -291,4 +312,18 @@ pub fn version_paths(slug: &str, platform: &str, version: &str) -> Vec<String> {
     paths.push(format!("{}/report.json", crate::util::version_page(slug, version)));
     paths.push(format!("{}/history.json", crate::util::version_page(slug, version)));
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_of;
+
+    #[test]
+    fn project_pages() {
+        assert_eq!(project_of("/projects/sm64"), Some("sm64"));
+        assert_eq!(project_of("/projects/sm64/versions/us"), None);
+        assert_eq!(project_of("/projects/sm64/feed.xml"), None);
+        assert_eq!(project_of("/projects/"), None);
+        assert_eq!(project_of("/platform/n64"), None);
+    }
 }
